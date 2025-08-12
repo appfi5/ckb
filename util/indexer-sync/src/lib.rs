@@ -23,6 +23,7 @@ use ckb_logger::{error, info};
 use ckb_notify::NotifyController;
 use ckb_stop_handler::{CancellationToken, has_received_stop_signal, new_tokio_exit_rx};
 use ckb_store::ChainStore;
+use ckb_types::core::BlockExt;
 use ckb_types::{
     H256,
     core::{self, BlockNumber, BlockView},
@@ -45,7 +46,7 @@ pub trait IndexerSync {
     /// Retrieves the tip of the indexer
     fn tip(&self) -> Result<Option<(BlockNumber, Byte32)>, Error>;
     /// Appends a new block to the indexer
-    fn append(&self, block: &BlockView) -> Result<(), Error>;
+    fn append(&self, block: &BlockView, block_ext: &BlockExt) -> Result<(), Error>;
     /// Rollback the indexer to a previous state
     fn rollback(&self) -> Result<(), Error>;
     /// Get indexer identity
@@ -161,8 +162,20 @@ impl IndexerSyncService {
                                     block.number(),
                                     block.hash()
                                 );
-                                if let Err(e) = indexer.append(&block) {
-                                    error!("Failed to append block: {}. Will attempt to retry.", e);
+                                if let Some(block_ext) =
+                                    self.get_block_ext_by_number(block.number())
+                                {
+                                    if let Err(e) = indexer.append(&block, &block_ext) {
+                                        error!(
+                                            "Failed to append block: {}. Will attempt to retry.",
+                                            e
+                                        );
+                                    }
+                                } else {
+                                    error!(
+                                        "Failed to get block ext: {}. Will attempt to retry.",
+                                        block.number()
+                                    );
                                 }
                             } else {
                                 info!(
@@ -181,8 +194,15 @@ impl IndexerSyncService {
                 }
                 Ok(None) => match self.get_block_by_number(0) {
                     Some(block) => {
-                        if let Err(e) = indexer.append(&block) {
-                            error!("Failed to append block: {}. Will attempt to retry.", e);
+                        if let Some(block_ext) = self.get_block_ext_by_number(block.number()) {
+                            if let Err(e) = indexer.append(&block, &block_ext) {
+                                error!("Failed to append block: {}. Will attempt to retry.", e);
+                            }
+                        } else {
+                            error!(
+                                "Failed to get block ext: {}. Will attempt to retry.",
+                                block.number()
+                            );
                         }
                     }
                     None => {
@@ -299,6 +319,11 @@ impl IndexerSyncService {
     fn get_block_by_number(&self, block_number: u64) -> Option<core::BlockView> {
         let block_hash = self.secondary_db.get_block_hash(block_number)?;
         self.secondary_db.get_block(&block_hash)
+    }
+
+    fn get_block_ext_by_number(&self, block_number: u64) -> Option<BlockExt> {
+        let block_hash = self.secondary_db.get_block_hash(block_number)?;
+        self.secondary_db.get_block_ext(&block_hash)
     }
 }
 

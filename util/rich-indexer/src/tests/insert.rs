@@ -23,9 +23,10 @@ async fn test_append_block_0() {
         ),
     );
 
+    let block_ext = BlockExt::default();
     let data_path = String::from(BLOCK_DIR);
     indexer
-        .append(&read_block_view(0, data_path.clone()).into())
+        .append(&read_block_view(0, data_path.clone()).into(), &block_ext)
         .await
         .unwrap();
 
@@ -142,7 +143,8 @@ async fn with_custom_block_filter() {
         .transaction(tx01.clone())
         .header(HeaderBuilder::default().number(0.pack()).build())
         .build();
-    indexer.append(&block0).await.unwrap();
+    let block_ext = BlockExt::default();
+    indexer.append(&block0, &block_ext).await.unwrap();
     let tip = indexer_handle.get_indexer_tip().await.unwrap().unwrap();
     assert_eq!(0u64, tip.block_number.value());
     assert_eq!(block0.hash(), tip.block_hash.pack());
@@ -197,8 +199,8 @@ async fn with_custom_block_filter() {
                 .build(),
         )
         .build();
-
-    indexer.append(&block1).await.unwrap();
+    let block_ext = BlockExt::default();
+    indexer.append(&block1, &block_ext).await.unwrap();
     let tip = indexer_handle.get_indexer_tip().await.unwrap().unwrap();
     assert_eq!(1, tip.block_number.value());
     assert_eq!(block1.hash(), tip.block_hash.pack());
@@ -356,7 +358,8 @@ async fn with_custom_cell_filter() {
         .transaction(tx01.clone())
         .header(HeaderBuilder::default().number(0.pack()).build())
         .build();
-    indexer.append(&block0).await.unwrap();
+    let block_ext = BlockExt::default();
+    indexer.append(&block0, &block_ext).await.unwrap();
     let tip = indexer_handle.get_indexer_tip().await.unwrap().unwrap();
     assert_eq!(0, tip.block_number.value());
     assert_eq!(block0.hash(), tip.block_hash.pack());
@@ -445,8 +448,8 @@ async fn with_custom_cell_filter() {
                 .build(),
         )
         .build();
-
-    indexer.append(&block1).await.unwrap();
+    let block_ext = BlockExt::default();
+    indexer.append(&block1, &block_ext).await.unwrap();
     let tip = indexer_handle.get_indexer_tip().await.unwrap().unwrap();
     assert_eq!(1, tip.block_number.value());
     assert_eq!(block1.hash(), tip.block_hash.pack());

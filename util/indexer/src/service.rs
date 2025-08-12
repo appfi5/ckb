@@ -924,8 +924,8 @@ mod tests {
         H256,
         bytes::Bytes,
         core::{
-            BlockBuilder, Capacity, EpochNumberWithFraction, HeaderBuilder, ScriptHashType,
-            TransactionBuilder, capacity_bytes,
+            BlockBuilder, BlockExt, Capacity, EpochNumberWithFraction, HeaderBuilder,
+            ScriptHashType, TransactionBuilder, capacity_bytes,
         },
         packed::{CellInput, CellOutputBuilder, OutPoint, Script, ScriptBuilder},
     };
@@ -1017,7 +1017,8 @@ mod tests {
             .header(HeaderBuilder::default().number(0.pack()).build())
             .build();
 
-        indexer.append(&block0).unwrap();
+        let block_ext = BlockExt::default();
+        indexer.append(&block0, &block_ext).unwrap();
 
         let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
         let total_blocks = 255;
@@ -1078,7 +1079,7 @@ mod tests {
                 )
                 .build();
 
-            indexer.append(&pre_block).unwrap();
+            indexer.append(&pre_block, &block_ext).unwrap();
         }
 
         // test get_tip rpc
@@ -1612,8 +1613,8 @@ mod tests {
             .transaction(tx01.clone())
             .header(HeaderBuilder::default().number(0.pack()).build())
             .build();
-
-        indexer.append(&block0).unwrap();
+        let block_ext = BlockExt::default();
+        indexer.append(&block0, &block_ext).unwrap();
 
         let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
         let total_blocks = 255;
@@ -1673,8 +1674,8 @@ mod tests {
                         .build(),
                 )
                 .build();
-
-            indexer.append(&pre_block).unwrap();
+            let block_ext = BlockExt::default();
+            indexer.append(&pre_block, &block_ext).unwrap();
         }
 
         // test get_cells rpc with prefix search mode
@@ -1897,8 +1898,8 @@ mod tests {
             .transaction(tx01)
             .header(HeaderBuilder::default().number(0.pack()).build())
             .build();
-
-        indexer.append(&block0).unwrap();
+        let block_ext = BlockExt::default();
+        indexer.append(&block0, &block_ext).unwrap();
 
         // test get_cells rpc with output_data Prefix search mode
         let mut data = [0u8; 1];
