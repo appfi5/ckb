@@ -532,7 +532,7 @@ pub(crate) async fn update_block(
 
         // insert transaction
         let tx_id = bulk_insert_and_return_ids(
-            "transaction",
+            "ckb_transaction",
             &[
                 "tx_hash",
                 "version",
