@@ -514,10 +514,15 @@ pub(crate) async fn update_block(
         let cycles = if tx_index == 0 {
             0
         } else {
-            block_ext
-                .cycles
-                .as_ref()
-                .map_or(0, |cycles| cycles[tx_index - 1])
+            if block_number == 0 {
+                // genesis block has no cycles
+                0
+            } else {
+                block_ext
+                    .cycles
+                    .as_ref()
+                    .map_or(0, |cycles| cycles[tx_index - 1])
+            }
         };
         // get fee of tx from block ext
         // block_ext.txs_fees  except the cellbase tx
@@ -525,7 +530,12 @@ pub(crate) async fn update_block(
         let transaction_fee = if tx_index == 0 {
             0
         } else {
-            block_ext.txs_fees[tx_index - 1].as_u64()
+            if block_number == 0 {
+                // genesis block has no fee
+                0
+            } else {
+                block_ext.txs_fees[tx_index - 1].as_u64()
+            }
         };
         // get tx_size from block ext has some bug
         let bytes = tx_view.data().total_size();
