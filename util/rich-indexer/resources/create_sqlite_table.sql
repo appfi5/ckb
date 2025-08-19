@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS ckb_transaction(
     header_deps BLOB,
     cycles INTEGER,
     transaction_fee INTEGER,
-    bytes INTEGER,
+    bytes INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tx_association_header_dep(
@@ -97,12 +97,12 @@ CREATE TABLE IF NOT EXISTS output(
     occupied_capacity INTEGER
     is_spent INTEGER DEFAULT 0,
     consumed_tx_hash BLOB,
-    input_index INTEGER,
+    input_index INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS input(
     id INTEGER PRIMARY KEY,
-    output_id INTEGER PRIMARY KEY,
+    output_id INTEGER,
     pre_outpoint_tx_hash BLOB NOT NULL,
     pre_outpoint_index INTEGER NOT NULL,
     since BLOB NOT NULL,

@@ -19,10 +19,7 @@ CREATE INDEX IF NOT EXISTS "idx_output_table_type_script_id" ON "output" ("type_
 CREATE INDEX IF NOT EXISTS "idx_output_table_consumed_tx_hash_input_index" ON "output" ("consumed_tx_hash", "input_index");
 
 CREATE INDEX IF NOT EXISTS "idx_input_table_consumed_tx_id" ON "input" ("consumed_tx_id");
-CREATE INDEX IF NOT EXISTS "idx_input_table_tx_hash" ON "input" ("tx_hash");
+CREATE INDEX IF NOT EXISTS "idx_input_table_tx_hash" ON "input" ("consumed_tx_hash");
 
 CREATE INDEX IF NOT EXISTS "idx_script_table_script_hash" ON "script" ("script_hash");
 CREATE INDEX IF NOT EXISTS "idx_script_table_code_hash" ON "script" ("code_hash");
-
-CREATE INDEX IF NOT EXISTS "idx_address_table_address" ON "address" ("address");
-CREATE INDEX IF NOT EXISTS "idx_address_table_script_id" ON "address" ("script_id");

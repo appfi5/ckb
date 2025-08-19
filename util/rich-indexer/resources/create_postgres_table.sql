@@ -66,13 +66,13 @@ CREATE TABLE IF NOT EXISTS ckb_transaction(
     header_deps BYTEA,
     cycles INTEGER,
     transaction_fee BIGINT,
-    bytes BIGINT,
+    bytes BIGINT
 );
 
 CREATE TABLE IF NOT EXISTS tx_association_header_dep(
     id BIGSERIAL,
     tx_id BIGINT NOT NULL,
-    block_id BIGINT NOT NULL,
+    block_id BIGINT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tx_association_cell_dep(
@@ -97,12 +97,12 @@ CREATE TABLE IF NOT EXISTS output(
     occupied_capacity BIGINT,
     is_spent INTEGER DEFAULT 0,
     consumed_tx_hash BYTEA,
-    input_index INTEGER,
+    input_index INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS input(
     id BIGSERIAL PRIMARY KEY,
-    output_id BIGINT PRIMARY KEY,
+    output_id BIGINT,
     pre_outpoint_tx_hash BYTEA NOT NULL,
     pre_outpoint_index INTEGER NOT NULL,
     since BYTEA NOT NULL,
