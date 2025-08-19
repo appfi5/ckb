@@ -527,13 +527,8 @@ pub(crate) async fn update_block(
         } else {
             block_ext.txs_fees[tx_index - 1].as_u64()
         };
-        // get tx_size from block ext
-        // block_ext.txs_sizes include the cellbase tx
-        // see util/types/src/core/extras.rs
-        let bytes = block_ext
-            .txs_sizes
-            .as_ref()
-            .map_or(0, |sizes| sizes[tx_index]);
+        // get tx_size from block ext has some bug
+        let bytes = tx_view.data().total_size();
 
         // insert transaction
         let tx_id = bulk_insert_and_return_ids(
