@@ -16,8 +16,8 @@ use ckb_async_runtime::{
     tokio::{self, time},
 };
 use ckb_db_schema::{
-    COLUMN_BLOCK_BODY, COLUMN_BLOCK_EXTENSION, COLUMN_BLOCK_HEADER, COLUMN_BLOCK_PROPOSAL_IDS,
-    COLUMN_BLOCK_UNCLE, COLUMN_INDEX, COLUMN_META,
+    COLUMN_BLOCK_BODY, COLUMN_BLOCK_EXT, COLUMN_BLOCK_EXTENSION, COLUMN_BLOCK_HEADER,
+    COLUMN_BLOCK_PROPOSAL_IDS, COLUMN_BLOCK_UNCLE, COLUMN_INDEX, COLUMN_META,
 };
 use ckb_logger::{error, info};
 use ckb_notify::NotifyController;
@@ -65,6 +65,7 @@ pub fn new_secondary_db(ckb_db_config: &DBConfig, config: &IndexerSyncConfig) ->
         COLUMN_BLOCK_UNCLE,
         COLUMN_BLOCK_PROPOSAL_IDS,
         COLUMN_BLOCK_EXTENSION,
+        COLUMN_BLOCK_EXT,
     ];
     let secondary_opts = indexer_secondary_options(config);
     SecondaryDB::open_cf(
