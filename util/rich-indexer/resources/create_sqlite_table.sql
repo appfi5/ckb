@@ -62,11 +62,13 @@ CREATE TABLE IF NOT EXISTS ckb_transaction(
     block_id INTEGER NOT NULL,
     block_number INTEGER NOT NULL,
     block_hash BLOB,
+    block_timestamp INTEGER,
     tx_index INTEGER NOT NULL,
     header_deps BLOB,
     cycles INTEGER,
     transaction_fee INTEGER,
-    bytes INTEGER
+    bytes INTEGER,
+    capacity_involved INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tx_association_header_dep(

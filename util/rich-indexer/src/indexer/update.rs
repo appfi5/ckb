@@ -201,6 +201,32 @@ pub(crate) async fn query_output_id(
     .map(|row| row.map(|row| row.get::<i64, _>("id")))
 }
 
+// query output_capacity
+pub(crate) async fn query_output_capacity(
+    out_point: &OutPoint,
+    tx: &mut Transaction<'_, Any>,
+) -> Result<Option<i64>, Error> {
+    let output_tx_hash = out_point.tx_hash().raw_data().to_vec();
+    let output_index: u32 = out_point.index().unpack();
+
+    sqlx::query(
+        r#"
+        SELECT output.capacity
+        FROM
+            output
+        WHERE
+            output.tx_hash = $1
+            AND output.output_index = $2
+        "#,
+    )
+    .bind(output_tx_hash)
+    .bind(output_index as i32)
+    .fetch_optional(tx.as_mut())
+    .await
+    .map_err(|err| Error::DB(err.to_string()))
+    .map(|row| row.map(|row| row.get::<i64, _>("capacity")))
+}
+
 pub(crate) async fn query_block_id(
     block_hash: &[u8],
     tx: &mut Transaction<'_, Any>,
@@ -540,6 +566,18 @@ pub(crate) async fn update_block(
         // get tx_size from block ext has some bug
         let bytes = tx_view.data().total_size();
 
+        // calc capacity_involved: total input capacity
+        let mut capacity_involved = 0;
+        for input in tx_view.inputs() {
+            // skip input of cellbase tx
+            if tx_index == 0 {
+                continue;
+            }
+            if let Some(capacity) = query_output_capacity(&input.previous_output(), db_tx).await? {
+                capacity_involved += capacity;
+            }
+        }
+
         // insert transaction
         let tx_id = bulk_insert_and_return_ids(
             "ckb_transaction",
@@ -552,11 +590,13 @@ pub(crate) async fn update_block(
                 "block_id",
                 "block_number",
                 "block_hash",
+                "block_timestamp",
                 "tx_index",
                 "header_deps",
                 "cycles",
                 "transaction_fee",
                 "bytes",
+                "capacity_involved",
             ],
             &[vec![
                 tx_hash.clone().into(),
@@ -567,11 +607,13 @@ pub(crate) async fn update_block(
                 block_id.into(),
                 block_number.into(),
                 block_hash.clone().into(),
+                timestamp.into(),
                 tx_index.into(),
                 tx_header_deps.into(),
                 cycles.into(),
                 transaction_fee.into(),
                 bytes.into(),
+                capacity_involved.into(),
             ]],
             db_tx,
         )
