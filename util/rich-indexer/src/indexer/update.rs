@@ -4,7 +4,7 @@ use crate::store::SQLXPool;
 use ckb_indexer_sync::Error;
 use ckb_types::{
     H256,
-    core::{BlockExt, BlockView},
+    core::{BlockExt, BlockView, Capacity},
     packed::{CellbaseWitnessReader, OutPoint},
     prelude::*,
 };
@@ -342,8 +342,18 @@ pub(crate) async fn update_block(
     // cell_consumed means total output occupied capacity
     let mut cell_consumed = 0;
     for tx in block_view.transactions() {
-        cell_consumed += tx.outputs().total_size();
-        cell_consumed += tx.outputs_data().total_size();
+        for (index, output) in tx.outputs().into_iter().enumerate() {
+            let output_data_len = tx
+                .outputs_data()
+                .get(index)
+                .map(|data| data.raw_data().len())
+                .unwrap_or(0);
+            let occupied_capacity: u64 = output
+                .occupied_capacity(Capacity::bytes(output_data_len).unwrap())
+                .unwrap()
+                .as_u64();
+            cell_consumed += occupied_capacity;
+        }
     }
 
     // total_cell_capacity means total output capacity
@@ -765,7 +775,10 @@ pub(crate) async fn update_block(
                 .get(output_index)
                 .map(|data| data.raw_data().to_vec())
                 .unwrap_or_default();
-            let occupied_capacity = output.total_size() + output_data.len();
+            let occupied_capacity: u64 = output
+                .occupied_capacity(Capacity::bytes(output_data.len()).unwrap())
+                .unwrap()
+                .as_u64();
 
             // update when output is spent
             let is_spent = 0;
