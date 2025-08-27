@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS uncle_block(
     proposals_hash BLOB,
     extra_hash BLOB,
     extension BLOB,
-    proposals BLOB
+    proposals BLOB,
+    difficulty BLOB
 );
 
 CREATE TABLE IF NOT EXISTS ckb_transaction(

@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS uncle_block(
     proposals_hash BYTEA,
     extra_hash BYTEA,
     extension BYTEA,
-    proposals BYTEA
+    proposals BYTEA,
+    difficulty BYTEA
 );
 
 CREATE TABLE IF NOT EXISTS ckb_transaction(

@@ -488,6 +488,7 @@ pub(crate) async fn update_block(
             None => Vec::new(),
         };
         let uncle_block_proposals = uncle_block.data().proposals().as_bytes().to_vec();
+        let uncle_block_difficulty = uncle_block.difficulty().to_be_bytes().to_vec();
 
         uncle_block_values.push(vec![
             uncle_block_index.into(),
@@ -505,6 +506,7 @@ pub(crate) async fn update_block(
             uncle_block_extra_hash.into(),
             uncle_block_extension.into(),
             uncle_block_proposals.into(),
+            uncle_block_difficulty.into(),
         ]);
     }
     // insert to uncle_block table with transaction tx
@@ -526,6 +528,7 @@ pub(crate) async fn update_block(
             "extra_hash",
             "extension",
             "proposals",
+            "difficulty",
         ],
         &uncle_block_values,
         db_tx,
