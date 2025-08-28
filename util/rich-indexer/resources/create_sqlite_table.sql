@@ -97,7 +97,9 @@ CREATE TABLE IF NOT EXISTS output(
     lock_script_id INTEGER,
     type_script_id INTEGER,
     data BLOB,
-    occupied_capacity INTEGER
+    data_size INTEGER,
+    data_hash BLOB,
+    occupied_capacity INTEGER,
     is_spent INTEGER DEFAULT 0,
     consumed_tx_hash BLOB,
     input_index INTEGER

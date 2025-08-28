@@ -5,7 +5,7 @@ use ckb_indexer_sync::Error;
 use ckb_types::{
     H256,
     core::{BlockExt, BlockView, Capacity},
-    packed::{CellbaseWitnessReader, OutPoint},
+    packed::{CellOutput, CellbaseWitnessReader, OutPoint},
     prelude::*,
 };
 use sql_builder::SqlBuilder;
@@ -778,6 +778,11 @@ pub(crate) async fn update_block(
                 .get(output_index)
                 .map(|data| data.raw_data().to_vec())
                 .unwrap_or_default();
+            let data_size = output_data.len();
+            let data_hash: H256 = CellOutput::calc_data_hash(&output_data).unpack();
+            let data_hash = data_hash.as_bytes().to_vec();
+
+            // occupied capacity
             let occupied_capacity: u64 = output
                 .occupied_capacity(Capacity::bytes(output_data.len()).unwrap())
                 .unwrap()
@@ -798,6 +803,8 @@ pub(crate) async fn update_block(
                     "lock_script_id",
                     "type_script_id",
                     "data",
+                    "data_size",
+                    "data_hash",
                     "occupied_capacity",
                     "is_spent",
                     "consumed_tx_hash",
@@ -811,6 +818,8 @@ pub(crate) async fn update_block(
                     lock_script_id.into(),
                     type_script_id.map_or(FieldValue::NoneBigInt, FieldValue::BigInt),
                     output_data.into(),
+                    data_size.into(),
+                    data_hash.into(),
                     occupied_capacity.into(),
                     is_spent.into(),
                     consumed_tx_hash.into(),

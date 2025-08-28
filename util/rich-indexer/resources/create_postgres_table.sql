@@ -97,6 +97,8 @@ CREATE TABLE IF NOT EXISTS output(
     lock_script_id BIGINT,
     type_script_id BIGINT,
     data BYTEA,
+    data_size INTEGER,
+    data_hash BYTEA,
     occupied_capacity BIGINT,
     is_spent INTEGER DEFAULT 0,
     consumed_tx_hash BYTEA,
