@@ -372,6 +372,8 @@ pub(crate) async fn update_block(
         let output_count = tx.outputs().len();
         live_cell_changes += input_count as i64 - output_count as i64;
     }
+    // input of cellbase tx should be ignore
+    live_cell_changes -= 1;
 
     let block_size = block_view.data().total_size();
     // get from block ext
