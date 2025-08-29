@@ -18,6 +18,8 @@ CREATE INDEX IF NOT EXISTS "idx_output_table_lock_script_id" ON "output" ("lock_
 CREATE INDEX IF NOT EXISTS "idx_output_table_type_script_id" ON "output" ("type_script_id");
 CREATE INDEX IF NOT EXISTS "idx_output_table_consumed_tx_hash_input_index" ON "output" ("consumed_tx_hash", "input_index");
 
+CREATE INDEX IF NOT EXISTS "idx_output_data_table_output_id" ON "output_data" ("output_id");
+
 CREATE INDEX IF NOT EXISTS "idx_input_table_consumed_tx_id" ON "input" ("consumed_tx_id");
 CREATE INDEX IF NOT EXISTS "idx_input_table_tx_hash" ON "input" ("consumed_tx_hash");
 

@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS output(
     block_timestamp BIGINT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS output_data(
+    id BIGSERIAL PRIMARY KEY,
+    output_id BIGINT NOT NULL,
+    data BYTEA
+);
+
 CREATE TABLE IF NOT EXISTS input(
     id BIGSERIAL PRIMARY KEY,
     output_id BIGINT,

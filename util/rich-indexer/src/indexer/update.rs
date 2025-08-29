@@ -16,6 +16,7 @@ use sqlx::{
 };
 
 const BATCH_SIZE_THRESHOLD: usize = 1_000;
+const LARGE_OUTPUT_DATA_SIZE_THRESHOLD: usize = 1024;
 
 enum FieldValue {
     Binary(Vec<u8>),
@@ -795,45 +796,96 @@ pub(crate) async fn update_block(
             let consumed_tx_hash = Vec::new();
             let input_index = -1;
 
-            let _ = bulk_insert_and_return_ids(
-                "output",
-                &[
-                    "tx_id",
-                    "tx_hash",
-                    "output_index",
-                    "capacity",
-                    "lock_script_id",
-                    "type_script_id",
-                    "data",
-                    "data_size",
-                    "data_hash",
-                    "occupied_capacity",
-                    "is_spent",
-                    "consumed_tx_hash",
-                    "input_index",
-                    "block_number",
-                    "block_timestamp",
-                ],
-                &[vec![
-                    tx_id.into(),
-                    tx_hash.clone().into(),
-                    output_index.into(),
-                    output_capacity.into(),
-                    lock_script_id.into(),
-                    type_script_id.map_or(FieldValue::NoneBigInt, FieldValue::BigInt),
-                    output_data.into(),
-                    data_size.into(),
-                    data_hash.into(),
-                    occupied_capacity.into(),
-                    is_spent.into(),
-                    consumed_tx_hash.into(),
-                    input_index.into(),
-                    block_number.into(),
-                    timestamp.into(),
-                ]],
-                db_tx,
-            )
-            .await?;
+            // large output data (size > 1024) store in output_data table
+            if data_size > LARGE_OUTPUT_DATA_SIZE_THRESHOLD {
+                let output_id = bulk_insert_and_return_ids(
+                    "output",
+                    &[
+                        "tx_id",
+                        "tx_hash",
+                        "output_index",
+                        "capacity",
+                        "lock_script_id",
+                        "type_script_id",
+                        "data",
+                        "data_size",
+                        "data_hash",
+                        "occupied_capacity",
+                        "is_spent",
+                        "consumed_tx_hash",
+                        "input_index",
+                        "block_number",
+                        "block_timestamp",
+                    ],
+                    &[vec![
+                        tx_id.into(),
+                        tx_hash.clone().into(),
+                        output_index.into(),
+                        output_capacity.into(),
+                        lock_script_id.into(),
+                        type_script_id.map_or(FieldValue::NoneBigInt, FieldValue::BigInt),
+                        Vec::new().into(),
+                        data_size.into(),
+                        data_hash.into(),
+                        occupied_capacity.into(),
+                        is_spent.into(),
+                        consumed_tx_hash.into(),
+                        input_index.into(),
+                        block_number.into(),
+                        timestamp.into(),
+                    ]],
+                    db_tx,
+                )
+                .await?[0];
+
+                bulk_insert_and_return_ids(
+                    "output_data",
+                    &["output_id", "data"],
+                    &[vec![output_id.into(), output_data.into()]],
+                    db_tx,
+                )
+                .await?;
+            } else {
+                let _ = bulk_insert_and_return_ids(
+                    "output",
+                    &[
+                        "tx_id",
+                        "tx_hash",
+                        "output_index",
+                        "capacity",
+                        "lock_script_id",
+                        "type_script_id",
+                        "data",
+                        "data_size",
+                        "data_hash",
+                        "occupied_capacity",
+                        "is_spent",
+                        "consumed_tx_hash",
+                        "input_index",
+                        "block_number",
+                        "block_timestamp",
+                    ],
+                    &[vec![
+                        tx_id.into(),
+                        tx_hash.clone().into(),
+                        output_index.into(),
+                        output_capacity.into(),
+                        lock_script_id.into(),
+                        type_script_id.map_or(FieldValue::NoneBigInt, FieldValue::BigInt),
+                        output_data.into(),
+                        data_size.into(),
+                        data_hash.into(),
+                        occupied_capacity.into(),
+                        is_spent.into(),
+                        consumed_tx_hash.into(),
+                        input_index.into(),
+                        block_number.into(),
+                        timestamp.into(),
+                    ]],
+                    db_tx,
+                )
+                .await?;
+            }
         }
     }
 

@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS output(
     block_timestamp INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS output_data(
+    id INTEGER PRIMARY KEY,
+    output_id INTEGER NOT NULL,
+    data BLOB
+);
+
 CREATE TABLE IF NOT EXISTS input(
     id INTEGER PRIMARY KEY,
     output_id INTEGER,
