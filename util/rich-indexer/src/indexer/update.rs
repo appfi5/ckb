@@ -365,15 +365,15 @@ pub(crate) async fn update_block(
         }
     }
 
-    // input - output = live cell changes
+    // live cell changes = output - input
     let mut live_cell_changes = 0;
     for tx in block_view.transactions() {
         let input_count = tx.inputs().len();
         let output_count = tx.outputs().len();
-        live_cell_changes += input_count as i64 - output_count as i64;
+        live_cell_changes += output_count as i64 - input_count as i64;
     }
     // input of cellbase tx should be ignore
-    live_cell_changes -= 1;
+    live_cell_changes += 1;
 
     let block_size = block_view.data().total_size();
     // get from block ext
