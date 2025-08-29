@@ -102,7 +102,9 @@ CREATE TABLE IF NOT EXISTS output(
     occupied_capacity INTEGER,
     is_spent INTEGER DEFAULT 0,
     consumed_tx_hash BLOB,
-    input_index INTEGER
+    input_index INTEGER,
+    block_number INTEGER NOT NULL,
+    block_timestamp INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS input(

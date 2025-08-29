@@ -811,6 +811,8 @@ pub(crate) async fn update_block(
                     "is_spent",
                     "consumed_tx_hash",
                     "input_index",
+                    "block_number",
+                    "block_timestamp",
                 ],
                 &[vec![
                     tx_id.into(),
@@ -826,6 +828,8 @@ pub(crate) async fn update_block(
                     is_spent.into(),
                     consumed_tx_hash.into(),
                     input_index.into(),
+                    block_number.into(),
+                    timestamp.into(),
                 ]],
                 db_tx,
             )
