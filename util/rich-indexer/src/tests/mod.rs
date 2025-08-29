@@ -34,7 +34,7 @@ async fn insert_blocks(store: SQLXPool) {
     let block_ext = BlockExt::default();
     for i in 0..10 {
         indexer
-            .append(&read_block_view(i, data_path.clone()).into(), &block_ext)
+            .append(&read_block_view(i, data_path.clone()).into(), &block_ext, 0)
             .await
             .unwrap();
     }

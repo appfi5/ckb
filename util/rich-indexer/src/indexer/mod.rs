@@ -71,8 +71,15 @@ impl IndexerSync for RichIndexer {
     }
 
     /// Appends a new block to the indexer
-    fn append(&self, block: &BlockView, block_ext: &BlockExt) -> Result<(), Error> {
-        let future = self.async_rich_indexer.append(block, block_ext);
+    fn append(
+        &self,
+        block: &BlockView,
+        block_ext: &BlockExt,
+        block_interval: u64,
+    ) -> Result<(), Error> {
+        let future = self
+            .async_rich_indexer
+            .append(block, block_ext, block_interval);
         self.async_runtime.block_on(future)
     }
 
@@ -128,6 +135,7 @@ impl AsyncRichIndexer {
         &self,
         block: &BlockView,
         block_ext: &BlockExt,
+        block_interval: u64,
     ) -> Result<(), Error> {
         let mut tx = self
             .store
@@ -136,7 +144,7 @@ impl AsyncRichIndexer {
             .map_err(|err| Error::DB(err.to_string()))?;
 
         if self.custom_filters.is_block_filter_match(block) {
-            update_block(block, block_ext, &mut tx).await?;
+            update_block(block, block_ext, block_interval, &mut tx).await?;
         }
 
         tx.commit()

@@ -46,7 +46,12 @@ pub trait IndexerSync {
     /// Retrieves the tip of the indexer
     fn tip(&self) -> Result<Option<(BlockNumber, Byte32)>, Error>;
     /// Appends a new block to the indexer
-    fn append(&self, block: &BlockView, block_ext: &BlockExt) -> Result<(), Error>;
+    fn append(
+        &self,
+        block: &BlockView,
+        block_ext: &BlockExt,
+        block_interval: u64,
+    ) -> Result<(), Error>;
     /// Rollback the indexer to a previous state
     fn rollback(&self) -> Result<(), Error>;
     /// Get indexer identity
@@ -146,6 +151,10 @@ impl IndexerSyncService {
         if let Err(e) = self.secondary_db.try_catch_up_with_primary() {
             error!("secondary_db try_catch_up_with_primary error {}", e);
         }
+
+        // record the latest block timestamp to calc block interval
+        let mut latest_block_timestamp = 0;
+
         loop {
             if has_received_stop_signal() {
                 info!("try_loop_sync received exit signal, exit now");
@@ -166,11 +175,36 @@ impl IndexerSyncService {
                                 if let Some(block_ext) =
                                     self.get_block_ext_by_number(block.number())
                                 {
-                                    if let Err(e) = indexer.append(&block, &block_ext) {
+                                    // Normally, the latest block timestamp is not 0, as it's set in the previous loop iteration
+                                    // If the latest block timestamp is 0 and the current block is not the genesis block
+                                    // This indicates that the indexer has restarted or block rollback
+                                    // Need to retrieve the latest block timestamp from the database
+                                    if latest_block_timestamp == 0 {
+                                        if let Some(latest_block) =
+                                            self.get_block_by_number(tip_number)
+                                        {
+                                            latest_block_timestamp = latest_block.timestamp();
+                                        } else {
+                                            error!(
+                                                "Failed to get latest block: {}. Will attempt to retry.",
+                                                tip_number
+                                            );
+                                            break;
+                                        }
+                                    }
+                                    if let Err(e) = indexer.append(
+                                        &block,
+                                        &block_ext,
+                                        block.timestamp() - latest_block_timestamp,
+                                    ) {
                                         error!(
                                             "Failed to append block: {}. Will attempt to retry.",
                                             e
                                         );
+                                    } else {
+                                        // record the latest block timestamp when current block appended success
+                                        // it will be used to calc block interval for next block
+                                        latest_block_timestamp = block.timestamp();
                                     }
                                 } else {
                                     error!(
@@ -186,6 +220,9 @@ impl IndexerSyncService {
                                     tip_hash
                                 );
                                 indexer.rollback().expect("rollback block should be OK");
+                                // when block rollback, the latest block timestamp is outdated
+                                // clean it and load correct value from database next time
+                                latest_block_timestamp = 0;
                             }
                         }
                         None => {
@@ -196,8 +233,13 @@ impl IndexerSyncService {
                 Ok(None) => match self.get_block_by_number(0) {
                     Some(block) => {
                         if let Some(block_ext) = self.get_block_ext_by_number(block.number()) {
-                            if let Err(e) = indexer.append(&block, &block_ext) {
+                            // block interval is 0 for genesis block
+                            if let Err(e) = indexer.append(&block, &block_ext, 0) {
                                 error!("Failed to append block: {}. Will attempt to retry.", e);
+                            } else {
+                                // record the latest block timestamp when current block appended success
+                                // it will be used to calc block interval for next block
+                                latest_block_timestamp = block.timestamp();
                             }
                         } else {
                             error!(

@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS block(
     total_cell_capacity INTEGER,
     block_size INTEGER,
     cycles INTEGER,
-    live_cell_changes INTEGER
+    live_cell_changes INTEGER,
+    block_interval INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS uncle_block(

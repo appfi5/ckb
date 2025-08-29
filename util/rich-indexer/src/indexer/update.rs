@@ -285,6 +285,7 @@ pub(crate) async fn query_script_id(
 pub(crate) async fn update_block(
     block_view: &BlockView,
     block_ext: &BlockExt,
+    block_interval: u64,
     db_tx: &mut Transaction<'_, Any>,
 ) -> Result<(), Error> {
     // prepare block
@@ -429,6 +430,7 @@ pub(crate) async fn update_block(
             "block_size",
             "cycles",
             "live_cell_changes",
+            "block_interval",
         ],
         &[vec![
             block_hash.clone().into(),
@@ -462,6 +464,7 @@ pub(crate) async fn update_block(
             block_size.into(),
             cycles_sum.into(),
             live_cell_changes.into(),
+            block_interval.into(),
         ]],
         db_tx,
     )

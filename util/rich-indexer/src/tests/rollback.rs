@@ -17,7 +17,7 @@ async fn test_rollback_block_0() {
 
     let data_path = String::from(BLOCK_DIR);
     indexer
-        .append(&read_block_view(0, data_path.clone()).into(), &block_ext)
+        .append(&read_block_view(0, data_path.clone()).into(), &block_ext, 0)
         .await
         .unwrap();
 
@@ -158,7 +158,7 @@ async fn test_block_filter_and_rollback_block() {
 
     let data_path = String::from(BLOCK_DIR);
     indexer
-        .append(&read_block_view(0, data_path.clone()).into(), &block_ext)
+        .append(&read_block_view(0, data_path.clone()).into(), &block_ext, 0)
         .await
         .unwrap();
 
