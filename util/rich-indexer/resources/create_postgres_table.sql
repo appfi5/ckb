@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS ckb_transaction(
     block_timestamp BIGINT NOT NULL,
     tx_index INTEGER NOT NULL,
     header_deps BYTEA,
-    cycles INTEGER,
+    cycles BIGINT,
     transaction_fee BIGINT,
     bytes BIGINT,
     capacity_involved BIGINT
