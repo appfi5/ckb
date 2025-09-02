@@ -176,17 +176,33 @@ async fn bulk_insert_and_return_ids(
 }
 
 // query function
+
+// add global lrucache to cache query result
+use lru::LruCache;
+use std::sync::{Mutex, OnceLock};
+// (output_tx_hash, output_index) -> (output_id, capacity)
+static OUTPUT_CACHE: OnceLock<Mutex<LruCache<(Vec<u8>, u32), (i64, i64)>>> = OnceLock::new();
+const OUTPUT_CACHE_SIZE: usize = 1024;
+
 // query output_id
-pub(crate) async fn query_output_id(
+pub(crate) async fn query_output_id_and_capacity(
     out_point: &OutPoint,
     tx: &mut Transaction<'_, Any>,
-) -> Result<Option<i64>, Error> {
+) -> Result<Option<(i64, i64)>, Error> {
     let output_tx_hash = out_point.tx_hash().raw_data().to_vec();
     let output_index: u32 = out_point.index().unpack();
 
+    // check cache
+    let cache = OUTPUT_CACHE.get_or_init(|| Mutex::new(LruCache::new(OUTPUT_CACHE_SIZE)));
+    let mut cache_guard = cache.lock().unwrap();
+    let cache_key = (output_tx_hash.clone(), output_index);
+    if let Some(&(id, capacity)) = cache_guard.get(&cache_key) {
+        return Ok(Some((id, capacity)));
+    }
+
     sqlx::query(
         r#"
-        SELECT output.id
+        SELECT output.id, output.capacity
         FROM
             output
         WHERE
@@ -194,38 +210,19 @@ pub(crate) async fn query_output_id(
             AND output.output_index = $2
         "#,
     )
-    .bind(output_tx_hash)
+    .bind(output_tx_hash.clone())
     .bind(output_index as i32)
     .fetch_optional(tx.as_mut())
     .await
     .map_err(|err| Error::DB(err.to_string()))
-    .map(|row| row.map(|row| row.get::<i64, _>("id")))
-}
-
-// query output_capacity
-pub(crate) async fn query_output_capacity(
-    out_point: &OutPoint,
-    tx: &mut Transaction<'_, Any>,
-) -> Result<Option<i64>, Error> {
-    let output_tx_hash = out_point.tx_hash().raw_data().to_vec();
-    let output_index: u32 = out_point.index().unpack();
-
-    sqlx::query(
-        r#"
-        SELECT output.capacity
-        FROM
-            output
-        WHERE
-            output.tx_hash = $1
-            AND output.output_index = $2
-        "#,
-    )
-    .bind(output_tx_hash)
-    .bind(output_index as i32)
-    .fetch_optional(tx.as_mut())
-    .await
-    .map_err(|err| Error::DB(err.to_string()))
-    .map(|row| row.map(|row| row.get::<i64, _>("capacity")))
+    .map(|row| {
+        row.map(|row| {
+            let id = row.get::<i64, _>("id");
+            let capacity = row.get::<i64, _>("capacity");
+            cache_guard.put(cache_key, (id, capacity));
+            (id, capacity)
+        })
+    })
 }
 
 pub(crate) async fn query_block_id(
@@ -248,10 +245,21 @@ pub(crate) async fn query_block_id(
     .map(|row| row.map(|row| row.get::<i64, _>("id")))
 }
 
+// (script_hash) -> (script_id)
+static SCRIPT_CACHE: OnceLock<Mutex<LruCache<Vec<u8>, i64>>> = OnceLock::new();
+const SCRIPT_CACHE_SIZE: usize = 1024 * 1024;
+
 pub(crate) async fn query_script_id(
     script_hash: &[u8],
     tx: &mut Transaction<'_, Any>,
 ) -> Result<Option<i64>, Error> {
+    // check cache
+    let cache = SCRIPT_CACHE.get_or_init(|| Mutex::new(LruCache::new(SCRIPT_CACHE_SIZE)));
+    let mut cache_guard = cache.lock().unwrap();
+    if let Some(&id) = cache_guard.get(script_hash) {
+        return Ok(Some(id));
+    }
+
     sqlx::query(
         r#"
         SELECT id
@@ -265,7 +273,13 @@ pub(crate) async fn query_script_id(
     .fetch_optional(tx.as_mut())
     .await
     .map_err(|err| Error::DB(err.to_string()))
-    .map(|row| row.map(|row| row.get::<i64, _>("id")))
+    .map(|row| {
+        row.map(|row| {
+            let id = row.get::<i64, _>("id");
+            cache_guard.put(script_hash.to_vec(), id);
+            id
+        })
+    })
 }
 
 pub(crate) async fn update_block(
@@ -589,7 +603,9 @@ pub(crate) async fn update_block(
             if tx_index == 0 {
                 continue;
             }
-            if let Some(capacity) = query_output_capacity(&input.previous_output(), db_tx).await? {
+            if let Some((_output_id, capacity)) =
+                query_output_id_and_capacity(&input.previous_output(), db_tx).await?
+            {
                 capacity_involved += capacity;
             }
         }
@@ -653,7 +669,9 @@ pub(crate) async fn update_block(
         // process cell deps
         let mut tx_association_cell_dep_rows = Vec::new();
         for (cell_dep_index, cell_dep) in tx_view.cell_deps_iter().enumerate() {
-            if let Some(output_id) = query_output_id(&cell_dep.out_point(), db_tx).await? {
+            if let Some((output_id, _capacity)) =
+                query_output_id_and_capacity(&cell_dep.out_point(), db_tx).await?
+            {
                 let outpoint_tx_hash = cell_dep.out_point().tx_hash().raw_data().to_vec();
                 let outpoint_index: u32 = cell_dep.out_point().index().unpack();
                 tx_association_cell_dep_rows.push(vec![
@@ -687,7 +705,9 @@ pub(crate) async fn update_block(
             if tx_index == 0 {
                 continue;
             }
-            if let Some(output_id) = query_output_id(&input.previous_output(), db_tx).await? {
+            if let Some((output_id, _capacity)) =
+                query_output_id_and_capacity(&input.previous_output(), db_tx).await?
+            {
                 if !spend_cell(output_id, &tx_hash, input_index, db_tx).await? {
                     return Err(Error::DB("spend cell failed".to_string()));
                 }
