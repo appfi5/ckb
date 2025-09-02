@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS block(
     uncles_count INTEGER,
     uncle_block_hashes BYTEA,
     miner_script BYTEA,
-    miner_message character varying,
+    miner_message BYTEA,
     reward BIGINT,
     total_transaction_fee BIGINT,
     cell_consumed BIGINT,

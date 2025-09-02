@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS block(
     uncles_count INTEGER,
     uncle_block_hashes BLOB,
     miner_script BLOB,
-    miner_message TEXT,
+    miner_message BLOB,
     reward INTEGER,
     total_transaction_fee INTEGER,
     cell_consumed INTEGER,

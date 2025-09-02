@@ -335,12 +335,7 @@ pub(crate) async fn update_block(
         .to_entity()
         .as_bytes()
         .to_vec();
-    let miner_message = cellbase_witness_reader
-        .message()
-        .as_utf8()
-        .unwrap_or("")
-        .as_bytes()
-        .to_vec();
+    let miner_message = cellbase_witness_reader.message().raw_data().to_vec();
     // 1-11 blocks has no cellbase output
     let reward = if !cellbase_tx.outputs().is_empty() {
         cellbase_tx.outputs().get(0).unwrap().capacity().unpack()
