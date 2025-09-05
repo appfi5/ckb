@@ -19,28 +19,9 @@ spec:
         kubernetes.io/hostname: k8s120-wn120-141
       restartPolicy: Always
       containers:
-        - name: pg
-          image: registry.devops.rivtower.com/ckb-explorer/postgres:16.10
-          env:
-          - name: POSTGRES_PASSWORD
-            value: "123456"
-          - name: POSTGRES_USER
-            value: "postgres"
-          - name: PGDATA
-            value: "/var/lib/postgresql/data/pgdata"
-          command:
-          - "postgres"
-          - "-c"
-          - "wal_level=logical"
-          ports:
-          - containerPort: 5432
-            name: pg
-            protocol: TCP
-          volumeMounts:
-            - name: pg-data
-              mountPath: /var/lib/postgresql/data/pgdata
         - name: ckb
           image: registry.devops.rivtower.com/ckb-explorer/ckb:explorer-indexer
+          imagePullPolicy: Always
           command:
           - bash
           - -c
@@ -71,14 +52,6 @@ spec:
         resources:
           requests:
             storage: 300Gi
-    - metadata:
-        name: pg-data
-      spec:
-        accessModes: [ "ReadWriteOnce" ]
-        storageClassName: nfs-client
-        resources:
-          requests:
-            storage: 100Gi
 
 ---
 
@@ -91,10 +64,6 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - port: 5432
-      targetPort: 5432
-      protocol: TCP
-      name: pg
     - port: 8114
       targetPort: 8114
       protocol: TCP
@@ -339,7 +308,7 @@ data:
     # Alternatively, you can set up a PostgreSQL database service and provide the connection parameters.
     db_type = "postgres"
     db_name = "ckb-rich-indexer"
-    db_host = "127.0.0.1"
+    db_host = "pg-testnet-svc"
     db_port = 5432
     db_user = "postgres"
     db_password = "123456"
