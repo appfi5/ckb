@@ -131,5 +131,7 @@ CREATE TABLE IF NOT EXISTS script(
     hash_type INTEGER NOT NULL,
     args BLOB,
     script_hash BLOB NOT NULL,
+    timestamp INTEGER,
+    is_typescript INTEGER DEFAULT 0,
     UNIQUE(code_hash, hash_type, args)
 );

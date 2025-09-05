@@ -131,5 +131,7 @@ CREATE TABLE IF NOT EXISTS script(
     hash_type SMALLINT NOT NULL,
     args BYTEA,
     script_hash BYTEA NOT NULL,
+    timestamp BIGINT NOT NULL,
+    is_typescript INTEGER DEFAULT 0,
     UNIQUE(code_hash, hash_type, args)
 );

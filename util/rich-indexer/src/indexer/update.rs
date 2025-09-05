@@ -756,12 +756,13 @@ pub(crate) async fn update_block(
             } else {
                 bulk_insert_and_return_ids(
                     "script",
-                    &["code_hash", "hash_type", "args", "script_hash"],
+                    &["code_hash", "hash_type", "args", "script_hash", "timestamp"],
                     &[vec![
                         lock_script.code_hash().raw_data().to_vec().into(),
                         (u8::from(lock_script.hash_type()) as i16).into(),
                         lock_script.args().raw_data().to_vec().into(),
                         lock_script_hash.into(),
+                        timestamp.into(),
                     ]],
                     db_tx,
                 )
@@ -779,12 +780,21 @@ pub(crate) async fn update_block(
                 } else {
                     let id = bulk_insert_and_return_ids(
                         "script",
-                        &["code_hash", "hash_type", "args", "script_hash"],
+                        &[
+                            "code_hash",
+                            "hash_type",
+                            "args",
+                            "script_hash",
+                            "timestamp",
+                            "is_typescript",
+                        ],
                         &[vec![
                             output_type.code_hash().raw_data().to_vec().into(),
                             (u8::from(output_type.hash_type()) as i16).into(),
                             output_type.args().raw_data().to_vec().into(),
                             output_type_hash.into(),
+                            timestamp.into(),
+                            1.into(),
                         ]],
                         db_tx,
                     )
