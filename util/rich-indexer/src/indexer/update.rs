@@ -100,6 +100,8 @@ async fn spend_cell(
     output_id: i64,
     tx_hash: &[u8],
     input_index: usize,
+    consumed_block_number: u64,
+    consumed_timestamp: u64,
     tx: &mut Transaction<'_, Any>,
 ) -> Result<bool, Error> {
     let updated_rows = sqlx::query(
@@ -107,7 +109,9 @@ async fn spend_cell(
             UPDATE output
             SET is_spent = 1,
                 consumed_tx_hash = $2,
-                input_index = $3
+                input_index = $3,
+                consumed_block_number = $4,
+                consumed_timestamp = $5
             WHERE
                 id = $1
         "#,
@@ -115,6 +119,8 @@ async fn spend_cell(
     .bind(output_id)
     .bind(tx_hash)
     .bind(input_index as i32)
+    .bind(consumed_block_number as i64)
+    .bind(consumed_timestamp as i64)
     .execute(tx.as_mut())
     .await
     .map_err(|err| Error::DB(err.to_string()))?
@@ -706,7 +712,16 @@ pub(crate) async fn update_block(
             if let Some((output_id, _capacity)) =
                 query_output_id_and_capacity(&input.previous_output(), db_tx).await?
             {
-                if !spend_cell(output_id, &tx_hash, input_index, db_tx).await? {
+                if !spend_cell(
+                    output_id,
+                    &tx_hash,
+                    input_index,
+                    block_number,
+                    timestamp,
+                    db_tx,
+                )
+                .await?
+                {
                     return Err(Error::DB("spend cell failed".to_string()));
                 }
                 let pre_outpoint_tx_hash = input.previous_output().tx_hash().raw_data().to_vec();
@@ -839,11 +854,11 @@ pub(crate) async fn update_block(
                         "data_size",
                         "data_hash",
                         "occupied_capacity",
+                        "block_number",
+                        "block_timestamp",
                         "is_spent",
                         "consumed_tx_hash",
                         "input_index",
-                        "block_number",
-                        "block_timestamp",
                     ],
                     &[vec![
                         tx_id.into(),
@@ -856,11 +871,11 @@ pub(crate) async fn update_block(
                         data_size.into(),
                         data_hash.into(),
                         occupied_capacity.into(),
+                        block_number.into(),
+                        timestamp.into(),
                         is_spent.into(),
                         consumed_tx_hash.into(),
                         input_index.into(),
-                        block_number.into(),
-                        timestamp.into(),
                     ]],
                     db_tx,
                 )

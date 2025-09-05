@@ -101,11 +101,13 @@ CREATE TABLE IF NOT EXISTS output(
     data_size INTEGER,
     data_hash BYTEA,
     occupied_capacity BIGINT,
+    block_number BIGINT NOT NULL,
+    block_timestamp BIGINT NOT NULL,
     is_spent INTEGER DEFAULT 0,
     consumed_tx_hash BYTEA,
     input_index INTEGER,
-    block_number BIGINT NOT NULL,
-    block_timestamp BIGINT NOT NULL
+    consumed_block_number BIGINT,
+    consumed_timestamp BIGINT
 );
 
 CREATE TABLE IF NOT EXISTS output_data(

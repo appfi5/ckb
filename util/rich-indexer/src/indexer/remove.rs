@@ -66,6 +66,8 @@ async fn reset_spent_cells(tx_id_list: &[i64], tx: &mut Transaction<'_, Any>) ->
         .set("is_spent", 0)
         .set("consumed_tx_hash", "")
         .set("input_index", -1)
+        .set("consumed_block_number", -1)
+        .set("consumed_timestamp", -1)
         .and_where_in_query(
             "id",
             SqlBuilder::select_from("input")
