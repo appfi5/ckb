@@ -15,8 +15,9 @@ spec:
       labels:
         app: pg-testnet
     spec:
-      nodeSelector:
-        kubernetes.io/hostname: k8s120-wn120-141
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
       restartPolicy: Always
       containers:
         - name: pg
@@ -28,6 +29,12 @@ spec:
             value: "postgres"
           - name: PGDATA
             value: "/var/lib/postgresql/data/pgdata"
+          command:
+          - "postgres"
+          - "-c"
+          - "max_connections=300"
+          - "-c"
+          - "wal_level=logical"
           ports:
           - containerPort: 5432
             name: pg
