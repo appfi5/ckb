@@ -18,13 +18,16 @@ CREATE INDEX IF NOT EXISTS "index_tx_association_cell_dep_table_tx_id" ON "tx_as
 
 CREATE INDEX IF NOT EXISTS "idx_output_table_tx_id_output_index" ON "output" ("tx_id", "output_index");
 CREATE INDEX IF NOT EXISTS "idx_output_table_tx_hash_output_index" ON "output" ("tx_hash", "output_index");
-CREATE INDEX IF NOT EXISTS "idx_output_table_lock_script_id" ON "output" ("lock_script_id");
 CREATE INDEX IF NOT EXISTS "idx_output_table_type_script_id" ON "output" ("type_script_id");
 CREATE INDEX IF NOT EXISTS "idx_output_table_block_number" ON "output" ("block_number");
 CREATE INDEX IF NOT EXISTS "idx_output_table_block_timestamp" ON "output" ("block_timestamp");
 CREATE INDEX IF NOT EXISTS "idx_output_table_consumed_tx_hash_input_index" ON "output" ("consumed_tx_hash", "input_index");
 CREATE INDEX IF NOT EXISTS "idx_output_table_consumed_block_number" ON "output" ("consumed_block_number");
 CREATE INDEX IF NOT EXISTS "idx_output_table_consumed_timestamp_is_spent" ON "output" ("consumed_timestamp", "is_spent");
+CREATE INDEX IF NOT EXISTS "idx_output_lockscript_include_txhash" ON "output" ("lock_script_id") INCLUDE ("tx_hash");
+CREATE INDEX IF NOT EXISTS "idx_output_lockscript_consumedtxhash_full" ON "output" ("lock_script_id") INCLUDE ("consumed_tx_hash") WHERE "consumed_tx_hash" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "idx_output_final_covering" ON "output" ("block_timestamp", "consumed_timestamp", "lock_script_id") INCLUDE ("occupied_capacity");
+CREATE INDEX IF NOT EXISTS "idx_output_consumed_block_lock_capacity" ON "output" ("consumed_timestamp", "block_timestamp", "lock_script_id") INCLUDE ("occupied_capacity");
 
 CREATE INDEX IF NOT EXISTS "idx_output_data_table_output_id" ON "output_data" ("output_id");
 
