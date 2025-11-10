@@ -8,14 +8,13 @@ use ckb_types::{
     packed::{CellOutput, CellbaseWitnessReader, OutPoint},
     prelude::*,
 };
-use sql_builder::SqlBuilder;
+
 use sqlx::{
     Row, Transaction,
     any::{Any, AnyArguments},
     query::Query,
 };
 
-const BATCH_SIZE_THRESHOLD: usize = 1_000;
 const LARGE_OUTPUT_DATA_SIZE_THRESHOLD: usize = 1024;
 
 enum FieldValue {
@@ -129,56 +128,50 @@ async fn spend_cell(
     Ok(updated_rows > 0)
 }
 
-fn build_bulk_insert_sql(
-    table: &str,
-    fields: &[&str],
-    bulk: &[Vec<FieldValue>],
-) -> Result<String, Error> {
-    let mut builder = SqlBuilder::insert_into(table);
-    builder.fields(fields);
-    bulk.iter().enumerate().for_each(|(row_index, row)| {
-        let placeholders = (1..=row.len())
-            .map(|i| format!("${}", i + row_index * row.len()))
-            .collect::<Vec<String>>();
-        builder.values(&placeholders);
-    });
-    let sql = builder
-        .sql()
-        .map_err(|err| Error::DB(err.to_string()))?
-        .trim_end_matches(';')
-        .to_string();
-    Ok(sql)
-}
-
 async fn bulk_insert_and_return_ids(
     table: &str,
     fields: &[&str],
     rows: &[Vec<FieldValue>],
     tx: &mut Transaction<'_, Any>,
 ) -> Result<Vec<i64>, Error> {
-    let mut id_list = Vec::new();
-    for bulk in rows.chunks(BATCH_SIZE_THRESHOLD) {
-        // build query str
-        let sql = build_bulk_insert_sql(table, fields, bulk)?;
-        let sql = format!("{} RETURNING id", sql);
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
 
-        // bind
-        let mut query = SQLXPool::new_query(&sql);
-        for row in bulk {
-            for field in row {
-                query = field.bind(query);
-            }
+    let fields_count = fields.len();
+
+    let mut query = format!("INSERT INTO {} ({}) VALUES ", table, fields.join(", "));
+    let mut params = Vec::new();
+
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            query.push_str(", ");
         }
 
-        // execute
-        let mut rows = query
-            .fetch_all(tx.as_mut())
-            .await
-            .map_err(|err| Error::DB(err.to_string()))?;
-        id_list.append(&mut rows);
+        query.push('(');
+        for (j, field_value) in row.iter().enumerate() {
+            if j > 0 {
+                query.push_str(", ");
+            }
+            query.push_str(&format!("${}", i * fields_count + j + 1));
+
+            params.push(field_value);
+        }
+        query.push(')');
     }
-    let ret: Vec<_> = id_list.iter().map(|row| row.get::<i64, _>("id")).collect();
-    Ok(ret)
+
+    query.push_str(" RETURNING id");
+
+    let mut built_query = SQLXPool::new_query(&query);
+
+    for param in params {
+        built_query = param.bind(built_query);
+    }
+
+    let rows = built_query.fetch_all(&mut **tx).await.map_err(|err| Error::DB(err.to_string()))?;
+    let ids: Vec<i64> = rows.iter().map(|row| row.get("id")).collect();
+
+    Ok(ids)
 }
 
 // query function
