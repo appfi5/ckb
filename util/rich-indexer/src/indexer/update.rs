@@ -185,6 +185,7 @@ async fn bulk_insert_and_return_ids(
 
 // add global lrucache to cache query result
 use lru::LruCache;
+use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 // (output_tx_hash, output_index) -> (output_id, capacity)
 static OUTPUT_CACHE: OnceLock<Mutex<LruCache<(Vec<u8>, u32), (i64, i64)>>> = OnceLock::new();
@@ -198,15 +199,18 @@ pub(crate) async fn query_output_id_and_capacity(
     let output_tx_hash = out_point.tx_hash().raw_data().to_vec();
     let output_index: u32 = out_point.index().unpack();
 
-    // check cache
+    // check cache within a short scope, avoid holding the lock across await
     let cache = OUTPUT_CACHE.get_or_init(|| Mutex::new(LruCache::new(OUTPUT_CACHE_SIZE)));
-    let mut cache_guard = cache.lock().unwrap();
     let cache_key = (output_tx_hash.clone(), output_index);
-    if let Some(&(id, capacity)) = cache_guard.get(&cache_key) {
-        return Ok(Some((id, capacity)));
+    {
+        let mut guard = cache.lock().unwrap();
+        if let Some(&(id, capacity)) = guard.get(&cache_key) {
+            return Ok(Some((id, capacity)));
+        }
     }
 
-    sqlx::query(
+    // query database without holding the lock
+    let row_opt = sqlx::query(
         r#"
         SELECT output.id, output.capacity
         FROM
@@ -220,15 +224,18 @@ pub(crate) async fn query_output_id_and_capacity(
     .bind(output_index as i32)
     .fetch_optional(tx.as_mut())
     .await
-    .map_err(|err| Error::DB(err.to_string()))
-    .map(|row| {
-        row.map(|row| {
-            let id = row.get::<i64, _>("id");
-            let capacity = row.get::<i64, _>("capacity");
-            cache_guard.put(cache_key, (id, capacity));
-            (id, capacity)
-        })
-    })
+    .map_err(|err| Error::DB(err.to_string()))?;
+
+    if let Some(row) = row_opt {
+        let id = row.get::<i64, _>("id");
+        let capacity = row.get::<i64, _>("capacity");
+        // update cache after query
+        let mut guard = cache.lock().unwrap();
+        guard.put(cache_key, (id, capacity));
+        Ok(Some((id, capacity)))
+    } else {
+        Ok(None)
+    }
 }
 
 pub(crate) async fn query_block_id(
@@ -259,14 +266,15 @@ pub(crate) async fn query_script_id(
     script_hash: &[u8],
     tx: &mut Transaction<'_, Any>,
 ) -> Result<Option<i64>, Error> {
-    // check cache
     let cache = SCRIPT_CACHE.get_or_init(|| Mutex::new(LruCache::new(SCRIPT_CACHE_SIZE)));
-    let mut cache_guard = cache.lock().unwrap();
-    if let Some(&id) = cache_guard.get(script_hash) {
-        return Ok(Some(id));
+    {
+        let mut guard = cache.lock().unwrap();
+        if let Some(&id) = guard.get(script_hash) {
+            return Ok(Some(id));
+        }
     }
 
-    sqlx::query(
+    let row_opt = sqlx::query(
         r#"
         SELECT id
         FROM
@@ -278,14 +286,16 @@ pub(crate) async fn query_script_id(
     .bind(script_hash)
     .fetch_optional(tx.as_mut())
     .await
-    .map_err(|err| Error::DB(err.to_string()))
-    .map(|row| {
-        row.map(|row| {
-            let id = row.get::<i64, _>("id");
-            cache_guard.put(script_hash.to_vec(), id);
-            id
-        })
-    })
+    .map_err(|err| Error::DB(err.to_string()))?;
+
+    if let Some(row) = row_opt {
+        let id = row.get::<i64, _>("id");
+        let mut guard = cache.lock().unwrap();
+        guard.put(script_hash.to_vec(), id);
+        Ok(Some(id))
+    } else {
+        Ok(None)
+    }
 }
 
 pub(crate) async fn update_block(
@@ -557,6 +567,8 @@ pub(crate) async fn update_block(
     .await;
 
     // process transactions
+    // batch insert tx
+    let mut tx_values = Vec::new();
     for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
         let tx_hash = tx_view.hash().raw_data().to_vec();
         let tx_version = tx_view.version().to_be_bytes().to_vec();
@@ -573,29 +585,25 @@ pub(crate) async fn update_block(
         // see util/types/src/core/extras.rs
         let cycles = if tx_index == 0 {
             0
+        } else if block_number == 0 {
+            // genesis block has no cycles
+            0
         } else {
-            if block_number == 0 {
-                // genesis block has no cycles
-                0
-            } else {
-                block_ext
-                    .cycles
-                    .as_ref()
-                    .map_or(0, |cycles| cycles[tx_index - 1])
-            }
+            block_ext
+                .cycles
+                .as_ref()
+                .map_or(0, |cycles| cycles[tx_index - 1])
         };
         // get fee of tx from block ext
         // block_ext.txs_fees  except the cellbase tx
         // see util/types/src/core/extras.rs
         let transaction_fee = if tx_index == 0 {
             0
+        } else if block_number == 0 {
+            // genesis block has no fee
+            0
         } else {
-            if block_number == 0 {
-                // genesis block has no fee
-                0
-            } else {
-                block_ext.txs_fees[tx_index - 1].as_u64()
-            }
+            block_ext.txs_fees[tx_index - 1].as_u64()
         };
         // get tx_size from block ext has some bug
         let bytes = tx_view.data().total_size();
@@ -614,64 +622,72 @@ pub(crate) async fn update_block(
             }
         }
 
-        // insert transaction
-        let tx_id = bulk_insert_and_return_ids(
-            "ckb_transaction",
-            &[
-                "tx_hash",
-                "version",
-                "input_count",
-                "output_count",
-                "witnesses",
-                "block_id",
-                "block_number",
-                "block_hash",
-                "block_timestamp",
-                "tx_index",
-                "header_deps",
-                "cycles",
-                "transaction_fee",
-                "bytes",
-                "capacity_involved",
-            ],
-            &[vec![
-                tx_hash.clone().into(),
-                tx_version.into(),
-                tx_inputs_count.into(),
-                tx_outputs_count.into(),
-                tx_witnesses.into(),
-                block_id.into(),
-                block_number.into(),
-                block_hash.clone().into(),
-                timestamp.into(),
-                tx_index.into(),
-                tx_header_deps.into(),
-                cycles.into(),
-                transaction_fee.into(),
-                bytes.into(),
-                capacity_involved.into(),
-            ]],
-            db_tx,
-        )
-        .await?[0];
+        tx_values.push(vec![
+            tx_hash.clone().into(),
+            tx_version.into(),
+            tx_inputs_count.into(),
+            tx_outputs_count.into(),
+            tx_witnesses.into(),
+            block_id.into(),
+            block_number.into(),
+            block_hash.clone().into(),
+            timestamp.into(),
+            tx_index.into(),
+            tx_header_deps.into(),
+            cycles.into(),
+            transaction_fee.into(),
+            bytes.into(),
+            capacity_involved.into(),
+        ]);
+    }
 
-        // process header deps
-        let mut tx_association_header_dep_rows = Vec::new();
+    // insert transaction
+    let tx_ids = bulk_insert_and_return_ids(
+        "ckb_transaction",
+        &[
+            "tx_hash",
+            "version",
+            "input_count",
+            "output_count",
+            "witnesses",
+            "block_id",
+            "block_number",
+            "block_hash",
+            "block_timestamp",
+            "tx_index",
+            "header_deps",
+            "cycles",
+            "transaction_fee",
+            "bytes",
+            "capacity_involved",
+        ],
+        &tx_values,
+        db_tx,
+    )
+    .await?;
+
+    // process header deps
+    let mut tx_association_header_dep_rows = Vec::new();
+    for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
+        let tx_id = tx_ids[tx_index];
         for header_dep in tx_view.header_deps_iter() {
             if let Some(block_id) = query_block_id(&header_dep.raw_data(), db_tx).await? {
                 tx_association_header_dep_rows.push(vec![tx_id.into(), block_id.into()]);
             }
         }
-        let _ = bulk_insert_and_return_ids(
-            "tx_association_header_dep",
-            &["tx_id", "block_id"],
-            &tx_association_header_dep_rows,
-            db_tx,
-        )
-        .await?;
+    }
+    let _ = bulk_insert_and_return_ids(
+        "tx_association_header_dep",
+        &["tx_id", "block_id"],
+        &tx_association_header_dep_rows,
+        db_tx,
+    )
+    .await?;
 
-        // process cell deps
-        let mut tx_association_cell_dep_rows = Vec::new();
+    // process cell deps
+    let mut tx_association_cell_dep_rows = Vec::new();
+    for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
+        let tx_id = tx_ids[tx_index];
         for (cell_dep_index, cell_dep) in tx_view.cell_deps_iter().enumerate() {
             if let Some((output_id, _capacity)) =
                 query_output_id_and_capacity(&cell_dep.out_point(), db_tx).await?
@@ -688,27 +704,32 @@ pub(crate) async fn update_block(
                 ]);
             }
         }
-        let _ = bulk_insert_and_return_ids(
-            "tx_association_cell_dep",
-            &[
-                "tx_id",
-                "index",
-                "outpoint_tx_hash",
-                "outpoint_index",
-                "output_id",
-                "dep_type",
-            ],
-            &tx_association_cell_dep_rows,
-            db_tx,
-        )
-        .await?;
+    }
+    let _ = bulk_insert_and_return_ids(
+        "tx_association_cell_dep",
+        &[
+            "tx_id",
+            "index",
+            "outpoint_tx_hash",
+            "outpoint_index",
+            "output_id",
+            "dep_type",
+        ],
+        &tx_association_cell_dep_rows,
+        db_tx,
+    )
+    .await?;
 
-        // process inputs
+    // process inputs
+    let mut tx_association_input_rows = Vec::new();
+    for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
+        // skip input of cellbase tx
+        if tx_index == 0 {
+            continue;
+        }
+        let tx_id = tx_ids[tx_index];
+        let tx_hash = tx_view.hash().raw_data().to_vec();
         for (input_index, input) in tx_view.inputs().into_iter().enumerate() {
-            // skip input of cellbase tx
-            if tx_index == 0 {
-                continue;
-            }
             if let Some((output_id, _capacity)) =
                 query_output_id_and_capacity(&input.previous_output(), db_tx).await?
             {
@@ -730,92 +751,115 @@ pub(crate) async fn update_block(
                 let consumed_tx_id = tx_id;
                 let consumed_tx_hash = tx_hash.clone();
                 let input_index = input_index as i32;
-
-                // insert to input table
-                let _ = bulk_insert_and_return_ids(
-                    "input",
-                    &[
-                        "output_id",
-                        "pre_outpoint_tx_hash",
-                        "pre_outpoint_index",
-                        "since",
-                        "consumed_tx_id",
-                        "consumed_tx_hash",
-                        "input_index",
-                    ],
-                    &[vec![
-                        output_id.into(),
-                        pre_outpoint_tx_hash.into(),
-                        (pre_outpoint_index as i32).into(),
-                        since.into(),
-                        consumed_tx_id.into(),
-                        consumed_tx_hash.into(),
-                        input_index.into(),
-                    ]],
-                    db_tx,
-                )
-                .await?;
+                tx_association_input_rows.push(vec![
+                    output_id.into(),
+                    pre_outpoint_tx_hash.into(),
+                    (pre_outpoint_index as i32).into(),
+                    since.into(),
+                    consumed_tx_id.into(),
+                    consumed_tx_hash.into(),
+                    input_index.into(),
+                ]);
             }
         }
+    }
+    // insert to input table
+    let _ = bulk_insert_and_return_ids(
+        "input",
+        &[
+            "output_id",
+            "pre_outpoint_tx_hash",
+            "pre_outpoint_index",
+            "since",
+            "consumed_tx_id",
+            "consumed_tx_hash",
+            "input_index",
+        ],
+        &tx_association_input_rows,
+        db_tx,
+    )
+    .await?;
 
-        // process outputs
+    // process scripts
+    let mut tx_association_script_rows = Vec::new();
+    // de-duplicate by script_hash within the same block
+    let mut seen_script_hashes: HashSet<Vec<u8>> = HashSet::new();
+    for tx_view in block_view.transactions().iter() {
+        for output in tx_view.outputs().into_iter() {
+            // lock script
+            let lock_script = output.lock();
+            let lock_script_hash = lock_script.calc_script_hash().raw_data().to_vec();
+            if !seen_script_hashes.contains(&lock_script_hash)
+                && query_script_id(&lock_script_hash, db_tx).await?.is_none()
+            {
+                let lock_script_hash_clone = lock_script_hash.clone();
+                tx_association_script_rows.push(vec![
+                    lock_script.code_hash().raw_data().to_vec().into(),
+                    (u8::from(lock_script.hash_type()) as i16).into(),
+                    lock_script.args().raw_data().to_vec().into(),
+                    lock_script_hash_clone.into(),
+                    timestamp.into(),
+                    0.into(),
+                ]);
+                seen_script_hashes.insert(lock_script_hash);
+            };
+
+            // type script
+            let output_type = output.type_().to_opt();
+            if let Some(output_type) = output_type {
+                let output_type_hash = output_type.calc_script_hash().raw_data().to_vec();
+                if !seen_script_hashes.contains(&output_type_hash)
+                    && query_script_id(&output_type_hash, db_tx).await?.is_none()
+                {
+                    let output_type_hash_clone = output_type_hash.clone();
+                    tx_association_script_rows.push(vec![
+                        output_type.code_hash().raw_data().to_vec().into(),
+                        (u8::from(output_type.hash_type()) as i16).into(),
+                        output_type.args().raw_data().to_vec().into(),
+                        output_type_hash_clone.into(),
+                        timestamp.into(),
+                        1.into(),
+                    ]);
+                    seen_script_hashes.insert(output_type_hash);
+                };
+            };
+        }
+    }
+    bulk_insert_and_return_ids(
+        "script",
+        &[
+            "code_hash",
+            "hash_type",
+            "args",
+            "script_hash",
+            "timestamp",
+            "is_typescript",
+        ],
+        &tx_association_script_rows,
+        db_tx,
+    )
+    .await?;
+
+    // process outputs
+    let mut tx_association_output_rows = Vec::new();
+    for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
+        let tx_id = tx_ids[tx_index];
+        let tx_hash = tx_view.hash().raw_data().to_vec();
         for (output_index, output) in tx_view.outputs().into_iter().enumerate() {
             let output_capacity: u64 = output.capacity().unpack();
 
             // lock script
             let lock_script = output.lock();
             let lock_script_hash = lock_script.calc_script_hash().raw_data().to_vec();
-            let lock_script_id = if let Some(id) = query_script_id(&lock_script_hash, db_tx).await?
-            {
-                id
-            } else {
-                bulk_insert_and_return_ids(
-                    "script",
-                    &["code_hash", "hash_type", "args", "script_hash", "timestamp"],
-                    &[vec![
-                        lock_script.code_hash().raw_data().to_vec().into(),
-                        (u8::from(lock_script.hash_type()) as i16).into(),
-                        lock_script.args().raw_data().to_vec().into(),
-                        lock_script_hash.into(),
-                        timestamp.into(),
-                    ]],
-                    db_tx,
-                )
-                .await?[0]
-            };
+            let lock_script_id = query_script_id(&lock_script_hash, db_tx).await?.unwrap();
 
             // type script
             let output_type = output.type_().to_opt();
-            let mut type_script_id = None;
-            if let Some(output_type) = output_type {
+            let type_script_id = if let Some(output_type) = output_type {
                 let output_type_hash = output_type.calc_script_hash().raw_data().to_vec();
-                type_script_id = if let Some(id) = query_script_id(&output_type_hash, db_tx).await?
-                {
-                    Some(id)
-                } else {
-                    let id = bulk_insert_and_return_ids(
-                        "script",
-                        &[
-                            "code_hash",
-                            "hash_type",
-                            "args",
-                            "script_hash",
-                            "timestamp",
-                            "is_typescript",
-                        ],
-                        &[vec![
-                            output_type.code_hash().raw_data().to_vec().into(),
-                            (u8::from(output_type.hash_type()) as i16).into(),
-                            output_type.args().raw_data().to_vec().into(),
-                            output_type_hash.into(),
-                            timestamp.into(),
-                            1.into(),
-                        ]],
-                        db_tx,
-                    )
-                    .await?[0];
-                    Some(id)
-                };
+                query_script_id(&output_type_hash, db_tx).await?
+            } else {
+                None
             };
 
             // data
@@ -889,48 +933,49 @@ pub(crate) async fn update_block(
                 )
                 .await?;
             } else {
-                let _ = bulk_insert_and_return_ids(
-                    "output",
-                    &[
-                        "tx_id",
-                        "tx_hash",
-                        "output_index",
-                        "capacity",
-                        "lock_script_id",
-                        "type_script_id",
-                        "data",
-                        "data_size",
-                        "data_hash",
-                        "occupied_capacity",
-                        "is_spent",
-                        "consumed_tx_hash",
-                        "input_index",
-                        "block_number",
-                        "block_timestamp",
-                    ],
-                    &[vec![
-                        tx_id.into(),
-                        tx_hash.clone().into(),
-                        output_index.into(),
-                        output_capacity.into(),
-                        lock_script_id.into(),
-                        type_script_id.map_or(FieldValue::NoneBigInt, FieldValue::BigInt),
-                        output_data.into(),
-                        data_size.into(),
-                        data_hash.into(),
-                        occupied_capacity.into(),
-                        is_spent.into(),
-                        consumed_tx_hash.into(),
-                        input_index.into(),
-                        block_number.into(),
-                        timestamp.into(),
-                    ]],
-                    db_tx,
-                )
-                .await?;
+                tx_association_output_rows.push(vec![
+                    tx_id.into(),
+                    tx_hash.clone().into(),
+                    output_index.into(),
+                    output_capacity.into(),
+                    lock_script_id.into(),
+                    type_script_id.map_or(FieldValue::NoneBigInt, FieldValue::BigInt),
+                    output_data.into(),
+                    data_size.into(),
+                    data_hash.into(),
+                    occupied_capacity.into(),
+                    is_spent.into(),
+                    consumed_tx_hash.into(),
+                    input_index.into(),
+                    block_number.into(),
+                    timestamp.into(),
+                ]);
             }
         }
     }
+    let _ = bulk_insert_and_return_ids(
+        "output",
+        &[
+            "tx_id",
+            "tx_hash",
+            "output_index",
+            "capacity",
+            "lock_script_id",
+            "type_script_id",
+            "data",
+            "data_size",
+            "data_hash",
+            "occupied_capacity",
+            "is_spent",
+            "consumed_tx_hash",
+            "input_index",
+            "block_number",
+            "block_timestamp",
+        ],
+        &tx_association_output_rows,
+        db_tx,
+    )
+    .await?;
 
     Ok(())
 }
