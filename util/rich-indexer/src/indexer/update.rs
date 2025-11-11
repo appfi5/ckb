@@ -162,13 +162,18 @@ async fn bulk_insert_and_return_ids(
 
     query.push_str(" RETURNING id");
 
+    println!("sql: {}", query);
+
     let mut built_query = SQLXPool::new_query(&query);
 
     for param in params {
         built_query = param.bind(built_query);
     }
 
-    let rows = built_query.fetch_all(&mut **tx).await.map_err(|err| Error::DB(err.to_string()))?;
+    let rows = built_query
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|err| Error::DB(err.to_string()))?;
     let ids: Vec<i64> = rows.iter().map(|row| row.get("id")).collect();
 
     Ok(ids)
