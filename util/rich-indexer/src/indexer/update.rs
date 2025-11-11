@@ -162,6 +162,8 @@ async fn bulk_insert_and_return_ids(
         let sql = build_bulk_insert_sql(table, fields, bulk)?;
         let sql = format!("{} RETURNING id", sql);
 
+        println!("sql {:?}", sql);
+
         // bind
         let mut query = SQLXPool::new_query(&sql);
         for row in bulk {
