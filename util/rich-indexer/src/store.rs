@@ -211,8 +211,7 @@ impl SQLXPool {
         let mut temp_config = db_config.clone();
         temp_config.db_name = "postgres".to_string();
         let uri = build_url_for_postgres(&temp_config);
-        let connection_options =
-            AnyConnectOptions::from_str(&uri)?.log_statements(LevelFilter::Trace);
+        let connection_options = AnyConnectOptions::from_str(&uri)?.disable_statement_logging();
         let tmp_pool_options = AnyPoolOptions::new();
         let pool = tmp_pool_options.connect_with(connection_options).await?;
         // Check if database exists
