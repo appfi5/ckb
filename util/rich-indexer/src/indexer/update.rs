@@ -183,14 +183,6 @@ async fn bulk_insert_and_return_ids(
 
 // query function
 
-// add global lrucache to cache query result
-use lru::LruCache;
-use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
-// (output_tx_hash, output_index) -> (output_id, capacity)
-static OUTPUT_CACHE: OnceLock<Mutex<LruCache<(Vec<u8>, u32), (i64, i64)>>> = OnceLock::new();
-const OUTPUT_CACHE_SIZE: usize = 1024;
-
 // query output_id
 pub(crate) async fn query_output_id_and_capacity(
     out_point: &OutPoint,
@@ -199,17 +191,6 @@ pub(crate) async fn query_output_id_and_capacity(
     let output_tx_hash = out_point.tx_hash().raw_data().to_vec();
     let output_index: u32 = out_point.index().unpack();
 
-    // check cache within a short scope, avoid holding the lock across await
-    let cache = OUTPUT_CACHE.get_or_init(|| Mutex::new(LruCache::new(OUTPUT_CACHE_SIZE)));
-    let cache_key = (output_tx_hash.clone(), output_index);
-    {
-        let mut guard = cache.lock().unwrap();
-        if let Some(&(id, capacity)) = guard.get(&cache_key) {
-            return Ok(Some((id, capacity)));
-        }
-    }
-
-    // query database without holding the lock
     let row_opt = sqlx::query(
         r#"
         SELECT output.id, output.capacity
@@ -229,9 +210,6 @@ pub(crate) async fn query_output_id_and_capacity(
     if let Some(row) = row_opt {
         let id = row.get::<i64, _>("id");
         let capacity = row.get::<i64, _>("capacity");
-        // update cache after query
-        let mut guard = cache.lock().unwrap();
-        guard.put(cache_key, (id, capacity));
         Ok(Some((id, capacity)))
     } else {
         Ok(None)
@@ -257,6 +235,11 @@ pub(crate) async fn query_block_id(
     .map_err(|err| Error::DB(err.to_string()))
     .map(|row| row.map(|row| row.get::<i64, _>("id")))
 }
+
+// add global lrucache to cache query result
+use lru::LruCache;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
 
 // (script_hash) -> (script_id)
 static SCRIPT_CACHE: OnceLock<Mutex<LruCache<Vec<u8>, i64>>> = OnceLock::new();
@@ -566,6 +549,36 @@ pub(crate) async fn update_block(
     )
     .await;
 
+    // find output referred by tx inputs
+    // spend cell
+    let mut output_referred: HashMap<(usize, usize), (i64, i64)> = HashMap::new();
+    for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
+        // skip input of cellbase tx
+        if tx_index == 0 {
+            continue;
+        }
+        let tx_hash = tx_view.hash().raw_data().to_vec();
+        for (input_index, input) in tx_view.inputs().into_iter().enumerate() {
+            if let Some((output_id, capacity)) =
+                query_output_id_and_capacity(&input.previous_output(), db_tx).await?
+            {
+                if !spend_cell(
+                    output_id,
+                    &tx_hash,
+                    input_index,
+                    block_number,
+                    timestamp,
+                    db_tx,
+                )
+                .await?
+                {
+                    return Err(Error::DB("spend cell failed".to_string()));
+                }
+                output_referred.insert((tx_index, input_index), (output_id, capacity));
+            }
+        }
+    }
+
     // process transactions
     // batch insert tx
     let mut tx_values = Vec::new();
@@ -610,14 +623,12 @@ pub(crate) async fn update_block(
 
         // calc capacity_involved: total input capacity
         let mut capacity_involved = 0;
-        for input in tx_view.inputs() {
+        for (input_index, _input) in tx_view.inputs().into_iter().enumerate() {
             // skip input of cellbase tx
             if tx_index == 0 {
                 continue;
             }
-            if let Some((_output_id, capacity)) =
-                query_output_id_and_capacity(&input.previous_output(), db_tx).await?
-            {
+            if let Some((_output_id, capacity)) = output_referred.get(&(tx_index, input_index)) {
                 capacity_involved += capacity;
             }
         }
@@ -730,21 +741,7 @@ pub(crate) async fn update_block(
         let tx_id = tx_ids[tx_index];
         let tx_hash = tx_view.hash().raw_data().to_vec();
         for (input_index, input) in tx_view.inputs().into_iter().enumerate() {
-            if let Some((output_id, _capacity)) =
-                query_output_id_and_capacity(&input.previous_output(), db_tx).await?
-            {
-                if !spend_cell(
-                    output_id,
-                    &tx_hash,
-                    input_index,
-                    block_number,
-                    timestamp,
-                    db_tx,
-                )
-                .await?
-                {
-                    return Err(Error::DB("spend cell failed".to_string()));
-                }
+            if let Some((output_id, _capacity)) = output_referred.get(&(tx_index, input_index)) {
                 let pre_outpoint_tx_hash = input.previous_output().tx_hash().raw_data().to_vec();
                 let pre_outpoint_index: u32 = input.previous_output().index().unpack();
                 let since = input.since().raw_data().to_vec();
@@ -752,7 +749,7 @@ pub(crate) async fn update_block(
                 let consumed_tx_hash = tx_hash.clone();
                 let input_index = input_index as i32;
                 tx_association_input_rows.push(vec![
-                    output_id.into(),
+                    (*output_id).into(),
                     pre_outpoint_tx_hash.into(),
                     (pre_outpoint_index as i32).into(),
                     since.into(),

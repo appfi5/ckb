@@ -73,7 +73,7 @@ impl SQLXPool {
                 self.postgres_init(db_config).await?;
                 let uri = build_url_for_postgres(db_config);
                 let connection_options =
-                    AnyConnectOptions::from_str(&uri)?.log_statements(LevelFilter::Trace);
+                    AnyConnectOptions::from_str(&uri)?.disable_statement_logging();
                 let pool = pool_options.connect_with(connection_options).await?;
                 log::info!("PostgreSQL is connected.");
                 self.pool
