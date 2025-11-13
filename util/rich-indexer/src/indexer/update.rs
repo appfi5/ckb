@@ -5,7 +5,7 @@ use ckb_indexer_sync::Error;
 use ckb_types::{
     H256,
     core::{BlockExt, BlockView, Capacity},
-    packed::{CellOutput, CellbaseWitnessReader, OutPoint},
+    packed::{CellOutput, CellbaseWitnessReader},
     prelude::*,
 };
 use sql_builder::SqlBuilder;
@@ -96,39 +96,6 @@ pub async fn init_block(
     .map(|_| ())
 }
 
-async fn spend_cell(
-    output_id: i64,
-    tx_hash: &[u8],
-    input_index: usize,
-    consumed_block_number: u64,
-    consumed_timestamp: u64,
-    tx: &mut Transaction<'_, Any>,
-) -> Result<bool, Error> {
-    let updated_rows = sqlx::query(
-        r#"
-            UPDATE output
-            SET is_spent = 1,
-                consumed_tx_hash = $2,
-                input_index = $3,
-                consumed_block_number = $4,
-                consumed_timestamp = $5
-            WHERE
-                id = $1
-        "#,
-    )
-    .bind(output_id)
-    .bind(tx_hash)
-    .bind(input_index as i32)
-    .bind(consumed_block_number as i64)
-    .bind(consumed_timestamp as i64)
-    .execute(tx.as_mut())
-    .await
-    .map_err(|err| Error::DB(err.to_string()))?
-    .rows_affected();
-
-    Ok(updated_rows > 0)
-}
-
 fn build_bulk_insert_sql(
     table: &str,
     fields: &[&str],
@@ -182,58 +149,180 @@ async fn bulk_insert_and_return_ids(
 }
 
 // query function
-
-// query output_id
-pub(crate) async fn query_output_id_and_capacity(
-    out_point: &OutPoint,
+async fn batch_query_output_id_and_capacity(
+    pairs: &[(Vec<u8>, i32)],
     tx: &mut Transaction<'_, Any>,
-) -> Result<Option<(i64, i64)>, Error> {
-    let output_tx_hash = out_point.tx_hash().raw_data().to_vec();
-    let output_index: u32 = out_point.index().unpack();
-
-    let row_opt = sqlx::query(
-        r#"
-        SELECT output.id, output.capacity
-        FROM
-            output
-        WHERE
-            output.tx_hash = $1
-            AND output.output_index = $2
-        "#,
-    )
-    .bind(output_tx_hash.clone())
-    .bind(output_index as i32)
-    .fetch_optional(tx.as_mut())
-    .await
-    .map_err(|err| Error::DB(err.to_string()))?;
-
-    if let Some(row) = row_opt {
-        let id = row.get::<i64, _>("id");
-        let capacity = row.get::<i64, _>("capacity");
-        Ok(Some((id, capacity)))
-    } else {
-        Ok(None)
+) -> Result<HashMap<(Vec<u8>, i32), (i64, i64)>, Error> {
+    let mut ret: HashMap<(Vec<u8>, i32), (i64, i64)> = HashMap::new();
+    for chunk in pairs.chunks(BATCH_SIZE_THRESHOLD) {
+        let mut sql = String::from("SELECT id, capacity, tx_hash, output_index FROM output WHERE ");
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push_str(" OR ");
+            }
+            let p1 = i * 2 + 1;
+            let p2 = i * 2 + 2;
+            sql.push_str(&format!(
+                "(output.tx_hash = ${} AND output.output_index = ${})",
+                p1, p2
+            ));
+        }
+        let mut query = SQLXPool::new_query(&sql);
+        for (tx_hash, index) in chunk {
+            query = query.bind(tx_hash).bind(*index);
+        }
+        let rows = query
+            .fetch_all(tx.as_mut())
+            .await
+            .map_err(|err| Error::DB(err.to_string()))?;
+        for row in rows {
+            let id = row.get::<i64, _>("id");
+            let capacity = row.get::<i64, _>("capacity");
+            let tx_hash = row.get::<Vec<u8>, _>("tx_hash");
+            let output_index = row.get::<i32, _>("output_index");
+            ret.insert((tx_hash, output_index), (id, capacity));
+        }
     }
+    Ok(ret)
 }
 
-pub(crate) async fn query_block_id(
-    block_hash: &[u8],
+async fn batch_query_block_id(
+    hashes: &[Vec<u8>],
     tx: &mut Transaction<'_, Any>,
-) -> Result<Option<i64>, Error> {
-    sqlx::query(
-        r#"
-        SELECT id
-        FROM
-            block
-        WHERE
-            block_hash = $1
-        "#,
-    )
-    .bind(block_hash)
-    .fetch_optional(tx.as_mut())
-    .await
-    .map_err(|err| Error::DB(err.to_string()))
-    .map(|row| row.map(|row| row.get::<i64, _>("id")))
+) -> Result<HashMap<Vec<u8>, i64>, Error> {
+    let mut ret: HashMap<Vec<u8>, i64> = HashMap::new();
+    for chunk in hashes.chunks(BATCH_SIZE_THRESHOLD) {
+        let mut sql = String::from("SELECT id, block_hash FROM block WHERE block_hash IN (");
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&format!("${}", i + 1));
+        }
+        sql.push(')');
+        let mut query = SQLXPool::new_query(&sql);
+        for h in chunk {
+            query = query.bind(h);
+        }
+        let rows = query
+            .fetch_all(tx.as_mut())
+            .await
+            .map_err(|err| Error::DB(err.to_string()))?;
+        for row in rows {
+            let id = row.get::<i64, _>("id");
+            let block_hash = row.get::<Vec<u8>, _>("block_hash");
+            ret.insert(block_hash, id);
+        }
+    }
+    Ok(ret)
+}
+
+async fn batch_query_script_id(
+    hashes: &[Vec<u8>],
+    tx: &mut Transaction<'_, Any>,
+) -> Result<HashMap<Vec<u8>, i64>, Error> {
+    let mut ret: HashMap<Vec<u8>, i64> = HashMap::new();
+    for chunk in hashes.chunks(BATCH_SIZE_THRESHOLD) {
+        let mut sql = String::from("SELECT id, script_hash FROM script WHERE script_hash IN (");
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&format!("${}", i + 1));
+        }
+        sql.push(')');
+        let mut query = SQLXPool::new_query(&sql);
+        for h in chunk {
+            query = query.bind(h);
+        }
+        let rows = query
+            .fetch_all(tx.as_mut())
+            .await
+            .map_err(|err| Error::DB(err.to_string()))?;
+        for row in rows {
+            let id = row.get::<i64, _>("id");
+            let script_hash = row.get::<Vec<u8>, _>("script_hash");
+            ret.insert(script_hash, id);
+        }
+    }
+    Ok(ret)
+}
+
+async fn batch_spend_cells(
+    rows: &[(i64, Vec<u8>, i32, u64, u64)],
+    tx: &mut Transaction<'_, Any>,
+) -> Result<(), Error> {
+    for chunk in rows.chunks(BATCH_SIZE_THRESHOLD) {
+        let mut sql = String::from("UPDATE output SET ");
+        // is_spent
+        sql.push_str("is_spent = 1, ");
+        // consumed_tx_hash
+        sql.push_str("consumed_tx_hash = CASE ");
+        for i in 0..chunk.len() {
+            let id_p = i * 5 + 1;
+            let val_p = i * 5 + 2;
+            sql.push_str(&format!("WHEN id = ${} THEN ${} ", id_p, val_p));
+        }
+        sql.push_str("ELSE consumed_tx_hash END, ");
+        // input_index
+        sql.push_str("input_index = CASE ");
+        for i in 0..chunk.len() {
+            let id_p = i * 5 + 1;
+            let val_p = i * 5 + 3;
+            sql.push_str(&format!("WHEN id = ${} THEN ${} ", id_p, val_p));
+        }
+        sql.push_str("ELSE input_index END, ");
+        // consumed_block_number
+        sql.push_str("consumed_block_number = CASE ");
+        for i in 0..chunk.len() {
+            let id_p = i * 5 + 1;
+            let val_p = i * 5 + 4;
+            sql.push_str(&format!("WHEN id = ${} THEN ${} ", id_p, val_p));
+        }
+        sql.push_str("ELSE consumed_block_number END, ");
+        // consumed_timestamp
+        sql.push_str("consumed_timestamp = CASE ");
+        for i in 0..chunk.len() {
+            let id_p = i * 5 + 1;
+            let val_p = i * 5 + 5;
+            sql.push_str(&format!("WHEN id = ${} THEN ${} ", id_p, val_p));
+        }
+        sql.push_str("ELSE consumed_timestamp END ");
+        // WHERE
+        sql.push_str("WHERE id IN (");
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            let id_p = i * 5 + 1;
+            sql.push_str(&format!("${}", id_p));
+        }
+        sql.push(')');
+
+        // bind
+        let mut query = SQLXPool::new_query(&sql);
+        for (output_id, consumed_tx_hash, input_index, consumed_block_number, consumed_timestamp) in
+            chunk
+        {
+            query = query
+                .bind(*output_id)
+                .bind(consumed_tx_hash)
+                .bind(*input_index)
+                .bind(*consumed_block_number as i64)
+                .bind(*consumed_timestamp as i64);
+        }
+
+        // execute
+        let rows_affected = query
+            .execute(tx.as_mut())
+            .await
+            .map_err(|err| Error::DB(err.to_string()))?
+            .rows_affected();
+        if rows_affected != chunk.len() as u64 {
+            return Err(Error::DB("spend cell failed".to_string()));
+        }
+    }
+    Ok(())
 }
 
 // add global lrucache to cache query result
@@ -243,43 +332,10 @@ use std::sync::{Mutex, OnceLock};
 
 // (script_hash) -> (script_id)
 static SCRIPT_CACHE: OnceLock<Mutex<LruCache<Vec<u8>, i64>>> = OnceLock::new();
-const SCRIPT_CACHE_SIZE: usize = 1024 * 1024;
+const SCRIPT_CACHE_SIZE: usize = 16 * 1024 * 1024;
 
-pub(crate) async fn query_script_id(
-    script_hash: &[u8],
-    tx: &mut Transaction<'_, Any>,
-) -> Result<Option<i64>, Error> {
-    let cache = SCRIPT_CACHE.get_or_init(|| Mutex::new(LruCache::new(SCRIPT_CACHE_SIZE)));
-    {
-        let mut guard = cache.lock().unwrap();
-        if let Some(&id) = guard.get(script_hash) {
-            return Ok(Some(id));
-        }
-    }
-
-    let row_opt = sqlx::query(
-        r#"
-        SELECT id
-        FROM
-            script
-        WHERE
-            script_hash = $1
-        "#,
-    )
-    .bind(script_hash)
-    .fetch_optional(tx.as_mut())
-    .await
-    .map_err(|err| Error::DB(err.to_string()))?;
-
-    if let Some(row) = row_opt {
-        let id = row.get::<i64, _>("id");
-        let mut guard = cache.lock().unwrap();
-        guard.put(script_hash.to_vec(), id);
-        Ok(Some(id))
-    } else {
-        Ok(None)
-    }
-}
+static OUTPOINT_CACHE: OnceLock<Mutex<LruCache<(Vec<u8>, i32), (i64, i64)>>> = OnceLock::new();
+const OUTPOINT_CACHE_SIZE: usize = 1024 * 1024;
 
 pub(crate) async fn update_block(
     block_view: &BlockView,
@@ -549,35 +605,46 @@ pub(crate) async fn update_block(
     )
     .await;
 
-    // find output referred by tx inputs
-    // spend cell
+    // find output referred by tx inputs and spent cell
+    // (tx_index, input_index) -> (output_id, capacity)
     let mut output_referred: HashMap<(usize, usize), (i64, i64)> = HashMap::new();
+    // (tx_index, input_index) -> (prev_tx_hash, prev_index)
+    let mut input_pairs: Vec<((usize, usize), (Vec<u8>, i32))> = Vec::new();
     for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
-        // skip input of cellbase tx
         if tx_index == 0 {
             continue;
         }
-        let tx_hash = tx_view.hash().raw_data().to_vec();
         for (input_index, input) in tx_view.inputs().into_iter().enumerate() {
-            if let Some((output_id, capacity)) =
-                query_output_id_and_capacity(&input.previous_output(), db_tx).await?
-            {
-                if !spend_cell(
-                    output_id,
-                    &tx_hash,
-                    input_index,
-                    block_number,
-                    timestamp,
-                    db_tx,
-                )
-                .await?
-                {
-                    return Err(Error::DB("spend cell failed".to_string()));
-                }
-                output_referred.insert((tx_index, input_index), (output_id, capacity));
-            }
+            let pre_tx_hash = input.previous_output().tx_hash().raw_data().to_vec();
+            let pre_index_u32: u32 = input.previous_output().index().unpack();
+            let pre_index: i32 = pre_index_u32 as i32;
+            input_pairs.push(((tx_index, input_index), (pre_tx_hash, pre_index)));
         }
     }
+    let pairs_vec: Vec<(Vec<u8>, i32)> = input_pairs
+        .iter()
+        .map(|(_, (h, i))| (h.clone(), *i))
+        .collect();
+    let mapping = batch_query_output_id_and_capacity(&pairs_vec, db_tx).await?;
+    // (output_id, tx_hash, input_index, block_number, timestamp)
+    let mut spend_rows: Vec<(i64, Vec<u8>, i32, u64, u64)> = Vec::new();
+    for ((tx_index, input_index), (pre_tx_hash, pre_index)) in input_pairs {
+        if let Some((output_id, capacity)) = mapping.get(&(pre_tx_hash, pre_index)) {
+            let tx_hash = block_view.transactions()[tx_index]
+                .hash()
+                .raw_data()
+                .to_vec();
+            spend_rows.push((
+                *output_id,
+                tx_hash.clone(),
+                input_index as i32,
+                block_number,
+                timestamp,
+            ));
+            output_referred.insert((tx_index, input_index), (*output_id, *capacity));
+        }
+    }
+    batch_spend_cells(&spend_rows, db_tx).await?;
 
     // process transactions
     // batch insert tx
@@ -679,12 +746,21 @@ pub(crate) async fn update_block(
 
     // process header deps
     let mut tx_association_header_dep_rows = Vec::new();
+    let mut header_dep_refs: Vec<(i64, Vec<u8>)> = Vec::new();
+    let mut unique_hashes: HashSet<Vec<u8>> = HashSet::new();
     for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
         let tx_id = tx_ids[tx_index];
         for header_dep in tx_view.header_deps_iter() {
-            if let Some(block_id) = query_block_id(&header_dep.raw_data(), db_tx).await? {
-                tx_association_header_dep_rows.push(vec![tx_id.into(), block_id.into()]);
-            }
+            let h = header_dep.raw_data().to_vec();
+            header_dep_refs.push((tx_id, h.clone()));
+            unique_hashes.insert(h);
+        }
+    }
+    let hashes_vec: Vec<Vec<u8>> = unique_hashes.into_iter().collect();
+    let mapping_block = batch_query_block_id(&hashes_vec, db_tx).await?;
+    for (tx_id, h) in header_dep_refs {
+        if let Some(&block_id) = mapping_block.get(&h) {
+            tx_association_header_dep_rows.push(vec![tx_id.into(), block_id.into()]);
         }
     }
     let _ = bulk_insert_and_return_ids(
@@ -697,23 +773,61 @@ pub(crate) async fn update_block(
 
     // process cell deps
     let mut tx_association_cell_dep_rows = Vec::new();
+    let mut cell_dep_refs: Vec<(usize, usize, Vec<u8>, i32, i16)> = Vec::new();
+    let mut unique_pairs: HashSet<(Vec<u8>, i32)> = HashSet::new();
     for (tx_index, tx_view) in block_view.transactions().iter().enumerate() {
-        let tx_id = tx_ids[tx_index];
         for (cell_dep_index, cell_dep) in tx_view.cell_deps_iter().enumerate() {
-            if let Some((output_id, _capacity)) =
-                query_output_id_and_capacity(&cell_dep.out_point(), db_tx).await?
-            {
-                let outpoint_tx_hash = cell_dep.out_point().tx_hash().raw_data().to_vec();
-                let outpoint_index: u32 = cell_dep.out_point().index().unpack();
-                tx_association_cell_dep_rows.push(vec![
-                    tx_id.into(),
-                    cell_dep_index.into(),
-                    outpoint_tx_hash.into(),
-                    (outpoint_index as i32).into(),
-                    output_id.into(),
-                    (u8::from(cell_dep.dep_type()) as i16).into(),
-                ]);
+            let outpoint_tx_hash = cell_dep.out_point().tx_hash().raw_data().to_vec();
+            let outpoint_index_u32: u32 = cell_dep.out_point().index().unpack();
+            let outpoint_index: i32 = outpoint_index_u32 as i32;
+            let dep_type_i16: i16 = u8::from(cell_dep.dep_type()) as i16;
+            cell_dep_refs.push((
+                tx_index,
+                cell_dep_index,
+                outpoint_tx_hash.clone(),
+                outpoint_index,
+                dep_type_i16,
+            ));
+            unique_pairs.insert((outpoint_tx_hash, outpoint_index));
+        }
+    }
+    let pairs_vec: Vec<(Vec<u8>, i32)> = unique_pairs.into_iter().collect();
+    let outpoint_cache = OUTPOINT_CACHE.get_or_init(|| Mutex::new(LruCache::new(OUTPOINT_CACHE_SIZE)));
+    // (pre_tx_hash, pre_index) -> (output_id, capacity)
+    let mut mapping: HashMap<(Vec<u8>, i32), (i64, i64)> = HashMap::new();
+    let mut pending: Vec<(Vec<u8>, i32)> = Vec::new();
+    {
+        let mut guard = outpoint_cache.lock().unwrap();
+        for (h, i) in &pairs_vec {
+            if let Some(&(id, cap)) = guard.get(&(h.clone(), *i)) {
+                mapping.insert((h.clone(), *i), (id, cap));
+            } else {
+                pending.push((h.clone(), *i));
             }
+        }
+    }
+    if !pending.is_empty() {
+        let db_map = batch_query_output_id_and_capacity(&pending, db_tx).await?;
+        let mut guard = outpoint_cache.lock().unwrap();
+        for (k, v) in db_map.iter() {
+            guard.put(k.clone(), *v);
+        }
+        mapping.extend(db_map);
+    }
+    for (tx_index, cell_dep_index, outpoint_tx_hash, outpoint_index, dep_type_i16) in cell_dep_refs
+    {
+        if let Some((output_id, _capacity)) =
+            mapping.get(&(outpoint_tx_hash.clone(), outpoint_index))
+        {
+            let tx_id = tx_ids[tx_index];
+            tx_association_cell_dep_rows.push(vec![
+                tx_id.into(),
+                cell_dep_index.into(),
+                outpoint_tx_hash.into(),
+                outpoint_index.into(),
+                (*output_id).into(),
+                dep_type_i16.into(),
+            ]);
         }
     }
     let _ = bulk_insert_and_return_ids(
@@ -778,64 +892,96 @@ pub(crate) async fn update_block(
     .await?;
 
     // process scripts
-    let mut tx_association_script_rows = Vec::new();
-    // de-duplicate by script_hash within the same block
-    let mut seen_script_hashes: HashSet<Vec<u8>> = HashSet::new();
+    // (script_hash, (code_hash, hash_type, args, timestamp, is_typescript))
+    let mut script_info: HashMap<Vec<u8>, (Vec<u8>, i16, Vec<u8>, u64, i16)> = HashMap::new();
     for tx_view in block_view.transactions().iter() {
         for output in tx_view.outputs().into_iter() {
-            // lock script
             let lock_script = output.lock();
             let lock_script_hash = lock_script.calc_script_hash().raw_data().to_vec();
-            if !seen_script_hashes.contains(&lock_script_hash)
-                && query_script_id(&lock_script_hash, db_tx).await?.is_none()
-            {
-                let lock_script_hash_clone = lock_script_hash.clone();
-                tx_association_script_rows.push(vec![
-                    lock_script.code_hash().raw_data().to_vec().into(),
-                    (u8::from(lock_script.hash_type()) as i16).into(),
-                    lock_script.args().raw_data().to_vec().into(),
-                    lock_script_hash_clone.into(),
-                    timestamp.into(),
-                    0.into(),
-                ]);
-                seen_script_hashes.insert(lock_script_hash);
-            };
+            script_info.entry(lock_script_hash).or_insert((
+                lock_script.code_hash().raw_data().to_vec(),
+                u8::from(lock_script.hash_type()) as i16,
+                lock_script.args().raw_data().to_vec(),
+                timestamp,
+                0,
+            ));
 
-            // type script
             let output_type = output.type_().to_opt();
             if let Some(output_type) = output_type {
                 let output_type_hash = output_type.calc_script_hash().raw_data().to_vec();
-                if !seen_script_hashes.contains(&output_type_hash)
-                    && query_script_id(&output_type_hash, db_tx).await?.is_none()
-                {
-                    let output_type_hash_clone = output_type_hash.clone();
-                    tx_association_script_rows.push(vec![
-                        output_type.code_hash().raw_data().to_vec().into(),
-                        (u8::from(output_type.hash_type()) as i16).into(),
-                        output_type.args().raw_data().to_vec().into(),
-                        output_type_hash_clone.into(),
-                        timestamp.into(),
-                        1.into(),
-                    ]);
-                    seen_script_hashes.insert(output_type_hash);
-                };
-            };
+                script_info.entry(output_type_hash).or_insert((
+                    output_type.code_hash().raw_data().to_vec(),
+                    u8::from(output_type.hash_type()) as i16,
+                    output_type.args().raw_data().to_vec(),
+                    timestamp,
+                    1,
+                ));
+            }
         }
     }
-    bulk_insert_and_return_ids(
-        "script",
-        &[
-            "code_hash",
-            "hash_type",
-            "args",
-            "script_hash",
-            "timestamp",
-            "is_typescript",
-        ],
-        &tx_association_script_rows,
-        db_tx,
-    )
-    .await?;
+    let all_hashes: Vec<Vec<u8>> = script_info.keys().cloned().collect();
+    let cache = SCRIPT_CACHE.get_or_init(|| Mutex::new(LruCache::new(SCRIPT_CACHE_SIZE)));
+    let mut mapping_script_ids: HashMap<Vec<u8>, i64> = HashMap::new();
+    let mut pending_hashes: Vec<Vec<u8>> = Vec::new();
+    {
+        let mut guard = cache.lock().unwrap();
+        for h in &all_hashes {
+            if let Some(&id) = guard.get(h) {
+                mapping_script_ids.insert(h.clone(), id);
+            } else {
+                pending_hashes.push(h.clone());
+            }
+        }
+    }
+    if !pending_hashes.is_empty() {
+        let db_map = batch_query_script_id(&pending_hashes, db_tx).await?;
+        {
+            let mut guard = cache.lock().unwrap();
+            for (h, id) in db_map.iter() {
+                guard.put(h.clone(), *id);
+            }
+        }
+        mapping_script_ids.extend(db_map);
+    }
+    let mut insert_rows: Vec<Vec<FieldValue>> = Vec::new();
+    let mut insert_hashes: Vec<Vec<u8>> = Vec::new();
+    for (hash, (code_hash, hash_type, args, ts, is_typescript)) in script_info.iter() {
+        if !mapping_script_ids.contains_key(hash) {
+            insert_rows.push(vec![
+                code_hash.clone().into(),
+                (*hash_type).into(),
+                args.clone().into(),
+                hash.clone().into(),
+                (*ts).into(),
+                (*is_typescript).into(),
+            ]);
+            insert_hashes.push(hash.clone());
+        }
+    }
+    if !insert_rows.is_empty() {
+        let ids = bulk_insert_and_return_ids(
+            "script",
+            &[
+                "code_hash",
+                "hash_type",
+                "args",
+                "script_hash",
+                "timestamp",
+                "is_typescript",
+            ],
+            &insert_rows,
+            db_tx,
+        )
+        .await?;
+        {
+            let mut guard = cache.lock().unwrap();
+            for (i, id) in ids.iter().enumerate() {
+                let h = insert_hashes[i].clone();
+                mapping_script_ids.insert(h.clone(), *id);
+                guard.put(h, *id);
+            }
+        }
+    }
 
     // process outputs
     let mut tx_association_output_rows = Vec::new();
@@ -845,21 +991,18 @@ pub(crate) async fn update_block(
         for (output_index, output) in tx_view.outputs().into_iter().enumerate() {
             let output_capacity: u64 = output.capacity().unpack();
 
-            // lock script
             let lock_script = output.lock();
             let lock_script_hash = lock_script.calc_script_hash().raw_data().to_vec();
-            let lock_script_id = query_script_id(&lock_script_hash, db_tx).await?.unwrap();
+            let lock_script_id = *mapping_script_ids.get(&lock_script_hash).unwrap();
 
-            // type script
             let output_type = output.type_().to_opt();
             let type_script_id = if let Some(output_type) = output_type {
                 let output_type_hash = output_type.calc_script_hash().raw_data().to_vec();
-                query_script_id(&output_type_hash, db_tx).await?
+                mapping_script_ids.get(&output_type_hash).copied()
             } else {
                 None
             };
 
-            // data
             let output_data = tx_view
                 .outputs_data()
                 .get(output_index)
