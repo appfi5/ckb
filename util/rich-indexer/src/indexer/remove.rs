@@ -64,7 +64,7 @@ async fn remove_batch_by_blobs(
 async fn reset_spent_cells(tx_id_list: &[i64], tx: &mut Transaction<'_, Any>) -> Result<(), Error> {
     let query = SqlBuilder::update_table("output")
         .set("is_spent", 0)
-        .set("consumed_tx_hash", "")
+        .set("consumed_tx_hash", "'\\x'::bytea")
         .set("input_index", -1)
         .set("consumed_block_number", -1)
         .set("consumed_timestamp", -1)
