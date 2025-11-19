@@ -182,14 +182,6 @@ async fn bulk_insert_and_return_ids(
 }
 
 // query function
-
-// add global lrucache to cache query result
-use lru::LruCache;
-use std::sync::{Mutex, OnceLock};
-// (output_tx_hash, output_index) -> (output_id, capacity)
-static OUTPUT_CACHE: OnceLock<Mutex<LruCache<(Vec<u8>, u32), (i64, i64)>>> = OnceLock::new();
-const OUTPUT_CACHE_SIZE: usize = 1024;
-
 // query output_id
 pub(crate) async fn query_output_id_and_capacity(
     out_point: &OutPoint,
@@ -197,14 +189,6 @@ pub(crate) async fn query_output_id_and_capacity(
 ) -> Result<Option<(i64, i64)>, Error> {
     let output_tx_hash = out_point.tx_hash().raw_data().to_vec();
     let output_index: u32 = out_point.index().unpack();
-
-    // check cache
-    let cache = OUTPUT_CACHE.get_or_init(|| Mutex::new(LruCache::new(OUTPUT_CACHE_SIZE)));
-    let mut cache_guard = cache.lock().unwrap();
-    let cache_key = (output_tx_hash.clone(), output_index);
-    if let Some(&(id, capacity)) = cache_guard.get(&cache_key) {
-        return Ok(Some((id, capacity)));
-    }
 
     sqlx::query(
         r#"
@@ -225,7 +209,6 @@ pub(crate) async fn query_output_id_and_capacity(
         row.map(|row| {
             let id = row.get::<i64, _>("id");
             let capacity = row.get::<i64, _>("capacity");
-            cache_guard.put(cache_key, (id, capacity));
             (id, capacity)
         })
     })
@@ -251,9 +234,12 @@ pub(crate) async fn query_block_id(
     .map(|row| row.map(|row| row.get::<i64, _>("id")))
 }
 
+// add global lrucache to cache query result
+use lru::LruCache;
+use std::sync::{Mutex, OnceLock};
 // (script_hash) -> (script_id)
 static SCRIPT_CACHE: OnceLock<Mutex<LruCache<Vec<u8>, i64>>> = OnceLock::new();
-const SCRIPT_CACHE_SIZE: usize = 1024 * 1024;
+const SCRIPT_CACHE_SIZE: usize = 16 * 1024 * 1024;
 
 pub(crate) async fn query_script_id(
     script_hash: &[u8],
@@ -261,8 +247,12 @@ pub(crate) async fn query_script_id(
 ) -> Result<Option<i64>, Error> {
     // check cache
     let cache = SCRIPT_CACHE.get_or_init(|| Mutex::new(LruCache::new(SCRIPT_CACHE_SIZE)));
-    let mut cache_guard = cache.lock().unwrap();
-    if let Some(&id) = cache_guard.get(script_hash) {
+
+    let hit = {
+        let mut guard = cache.lock().unwrap();
+        guard.get(script_hash).copied()
+    };
+    if let Some(id) = hit {
         return Ok(Some(id));
     }
 
@@ -282,7 +272,10 @@ pub(crate) async fn query_script_id(
     .map(|row| {
         row.map(|row| {
             let id = row.get::<i64, _>("id");
-            cache_guard.put(script_hash.to_vec(), id);
+            {
+                let mut guard = cache.lock().unwrap();
+                guard.put(script_hash.to_vec(), id);
+            }
             id
         })
     })
@@ -573,29 +566,25 @@ pub(crate) async fn update_block(
         // see util/types/src/core/extras.rs
         let cycles = if tx_index == 0 {
             0
+        } else if block_number == 0 {
+            // genesis block has no cycles
+            0
         } else {
-            if block_number == 0 {
-                // genesis block has no cycles
-                0
-            } else {
-                block_ext
-                    .cycles
-                    .as_ref()
-                    .map_or(0, |cycles| cycles[tx_index - 1])
-            }
+            block_ext
+                .cycles
+                .as_ref()
+                .map_or(0, |cycles| cycles[tx_index - 1])
         };
         // get fee of tx from block ext
         // block_ext.txs_fees  except the cellbase tx
         // see util/types/src/core/extras.rs
         let transaction_fee = if tx_index == 0 {
             0
+        } else if block_number == 0 {
+            // genesis block has no fee
+            0
         } else {
-            if block_number == 0 {
-                // genesis block has no fee
-                0
-            } else {
-                block_ext.txs_fees[tx_index - 1].as_u64()
-            }
+            block_ext.txs_fees[tx_index - 1].as_u64()
         };
         // get tx_size from block ext has some bug
         let bytes = tx_view.data().total_size();
