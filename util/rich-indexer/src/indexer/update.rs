@@ -126,7 +126,7 @@ async fn spend_cell(
     .map_err(|err| Error::DB(err.to_string()))?
     .rows_affected();
 
-    Ok(updated_rows > 0)
+    Ok(updated_rows == 1)
 }
 
 fn build_bulk_insert_sql(
@@ -392,6 +392,8 @@ pub(crate) async fn update_block(
         for cycle in cycles {
             cycles_sum += cycle;
         }
+    } else {
+        return Err(Error::DB("block ext cycles is None".to_string()));
     }
 
     // insert to uncle_block table with transaction tx
@@ -573,7 +575,8 @@ pub(crate) async fn update_block(
             block_ext
                 .cycles
                 .as_ref()
-                .map_or(0, |cycles| cycles[tx_index - 1])
+                .map(|cycles| cycles[tx_index - 1])
+                .unwrap()
         };
         // get fee of tx from block ext
         // block_ext.txs_fees  except the cellbase tx
@@ -600,6 +603,11 @@ pub(crate) async fn update_block(
                 query_output_id_and_capacity(&input.previous_output(), db_tx).await?
             {
                 capacity_involved += capacity;
+            } else {
+                return Err(Error::DB(format!(
+                    "previous_output {} not found",
+                    input.previous_output()
+                )));
             }
         }
 
@@ -649,6 +657,11 @@ pub(crate) async fn update_block(
         for header_dep in tx_view.header_deps_iter() {
             if let Some(block_id) = query_block_id(&header_dep.raw_data(), db_tx).await? {
                 tx_association_header_dep_rows.push(vec![tx_id.into(), block_id.into()]);
+            } else {
+                return Err(Error::DB(format!(
+                    "header_dep {} not found",
+                    hex::encode(header_dep.raw_data())
+                )));
             }
         }
         let _ = bulk_insert_and_return_ids(
@@ -675,6 +688,11 @@ pub(crate) async fn update_block(
                     output_id.into(),
                     (u8::from(cell_dep.dep_type()) as i16).into(),
                 ]);
+            } else {
+                return Err(Error::DB(format!(
+                    "cell_dep {} not found",
+                    cell_dep.out_point()
+                )));
             }
         }
         let _ = bulk_insert_and_return_ids(
@@ -744,6 +762,11 @@ pub(crate) async fn update_block(
                     db_tx,
                 )
                 .await?;
+            } else {
+                return Err(Error::DB(format!(
+                    "previous_output {} not found",
+                    input.previous_output()
+                )));
             }
         }
 

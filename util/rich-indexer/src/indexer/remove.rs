@@ -23,6 +23,11 @@ pub(crate) async fn rollback_block(tx: &mut Transaction<'_, Any>) -> Result<(), 
     remove_batch_by_blobs("input", "consumed_tx_id", &tx_id_list, tx).await?;
     remove_batch_by_blobs("output", "tx_id", &tx_id_list, tx).await?;
 
+    // remove output data
+    // collect output id which data len > 1024
+    let output_id_list = query_big_output_id_list_by_tx_id_list(&tx_id_list, tx).await?;
+    remove_batch_by_blobs("output_data", "output_id", &output_id_list, tx).await?;
+
     // remove block
     remove_batch_by_blobs("block", "id", &[block_id], tx).await?;
 
@@ -122,6 +127,41 @@ async fn query_tx_id_list_by_block_id(
             .collect()
     })
     .map_err(|err| Error::DB(err.to_string()))
+}
+
+async fn query_big_output_id_list_by_tx_id_list(
+    tx_id_list: &[i64],
+    tx: &mut Transaction<'_, Any>,
+) -> Result<Vec<i64>, Error> {
+    if tx_id_list.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // build query str
+    let mut query_builder = SqlBuilder::select_from("output");
+    let sql = query_builder
+        .field("id")
+        .and_where_in("tx_id", &sqlx_param_placeholders(1..tx_id_list.len())?)
+        .and_where("data_len > 1024")
+        .sql()
+        .map_err(|err| Error::DB(err.to_string()))?;
+
+    // bind
+    let mut query: sqlx::query::Query<'_, Any, sqlx::any::AnyArguments<'_>> = sqlx::query(&sql);
+    for id in tx_id_list {
+        query = query.bind(id);
+    }
+
+    // execute
+    query
+        .fetch_all(tx.as_mut())
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| row.get::<i64, _>("id"))
+                .collect()
+        })
+        .map_err(|err| Error::DB(err.to_string()))
 }
 
 fn sqlx_param_placeholders(range: std::ops::Range<usize>) -> Result<Vec<String>, Error> {
