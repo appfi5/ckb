@@ -142,7 +142,7 @@ async fn query_big_output_id_list_by_tx_id_list(
     let sql = query_builder
         .field("id")
         .and_where_in("tx_id", &sqlx_param_placeholders(1..tx_id_list.len())?)
-        .and_where("data_len > 1024")
+        .and_where("data_size > 1024")
         .sql()
         .map_err(|err| Error::DB(err.to_string()))?;
 
