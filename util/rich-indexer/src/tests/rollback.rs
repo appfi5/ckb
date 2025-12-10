@@ -13,10 +13,11 @@ async fn test_rollback_block_0() {
             None,
         ),
     );
+    let block_ext = BlockExt::default();
 
     let data_path = String::from(BLOCK_DIR);
     indexer
-        .append(&read_block_view(0, data_path.clone()).into())
+        .append(&read_block_view(0, data_path.clone()).into(), &block_ext, 0)
         .await
         .unwrap();
 
@@ -153,10 +154,11 @@ async fn test_block_filter_and_rollback_block() {
             None,
         ),
     );
+    let block_ext = BlockExt::default();
 
     let data_path = String::from(BLOCK_DIR);
     indexer
-        .append(&read_block_view(0, data_path.clone()).into())
+        .append(&read_block_view(0, data_path.clone()).into(), &block_ext, 0)
         .await
         .unwrap();
 

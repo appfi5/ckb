@@ -1,6 +1,7 @@
 use crate::service::SUBSCRIBER_NAME;
 use crate::store::{Batch, IteratorDirection, Store};
 use ckb_indexer_sync::{CustomFilters, Error, IndexerSync, Pool};
+use ckb_types::core::BlockExt;
 use ckb_types::{
     core::{BlockNumber, BlockView},
     packed::{Byte32, Bytes, CellOutput, OutPoint, Script},
@@ -314,7 +315,12 @@ where
     S: Store,
 {
     /// Parse the block, store the Cell Transaction etc. contained in the block with the designed index
-    fn append(&self, block: &BlockView) -> Result<(), Error> {
+    fn append(
+        &self,
+        block: &BlockView,
+        _block_ext: &BlockExt,
+        _block_interval: u64,
+    ) -> Result<(), Error> {
         let mut batch = self.store.batch()?;
         let transactions = block.transactions();
         let pool = self.pool.as_ref().map(|p| p.write().expect("acquire lock"));
@@ -1016,7 +1022,9 @@ mod tests {
             .header(HeaderBuilder::default().number(0).build())
             .build();
 
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         let (tip_number, tip_hash) = indexer.tip().unwrap().unwrap();
         assert_eq!(0, tip_number);
@@ -1098,7 +1106,10 @@ mod tests {
             .transaction(tx01.clone())
             .header(HeaderBuilder::default().number(0).build())
             .build();
-        indexer.append(&block0).unwrap();
+
+        let block0_ext = BlockExt::default();
+
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         let cellbase1 = TransactionBuilder::default()
             .input(CellInput::new_cellbase_input(1))
@@ -1153,7 +1164,9 @@ mod tests {
             )
             .build();
 
-        indexer.append(&block1).unwrap();
+        let block1_ext = BlockExt::default();
+
+        indexer.append(&block1, &block1_ext, 0).unwrap();
         let (tip_number, tip_hash) = indexer.tip().unwrap().unwrap();
         assert_eq!(1, tip_number);
         assert_eq!(block1.hash(), tip_hash);
@@ -1260,7 +1273,10 @@ mod tests {
             .transaction(tx01.clone())
             .header(HeaderBuilder::default().number(0).build())
             .build();
-        indexer.append(&block0).unwrap();
+
+        let block0_ext = BlockExt::default();
+
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         let cellbase1 = TransactionBuilder::default()
             .input(CellInput::new_cellbase_input(1))
@@ -1328,7 +1344,9 @@ mod tests {
             )
             .build();
 
-        indexer.append(&block1).unwrap();
+        let block1_ext = BlockExt::default();
+        indexer.append(&block1, &block1_ext, 0).unwrap();
+
         assert_eq!(
             1, // tx12
             indexer
@@ -1434,7 +1452,8 @@ mod tests {
             .header(HeaderBuilder::default().number(0).build())
             .build();
 
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
 
@@ -1491,8 +1510,8 @@ mod tests {
                         .build(),
                 )
                 .build();
-
-            indexer.append(&pre_block).unwrap();
+            let block_ext = BlockExt::default();
+            indexer.append(&pre_block, &block_ext, 0).unwrap();
         }
 
         let key_prefix = [KeyPrefix::ConsumedOutPoint as u8];
@@ -1544,7 +1563,8 @@ mod tests {
             .header(HeaderBuilder::default().number(0).build())
             .build();
 
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         let mut pre_block = block0;
 
@@ -1575,8 +1595,8 @@ mod tests {
                         .build(),
                 )
                 .build();
-
-            indexer.append(&pre_block).unwrap();
+            let block_ext = BlockExt::default();
+            indexer.append(&pre_block, &block_ext, 0).unwrap();
         }
 
         let (tip_number, _) = indexer.tip().unwrap().unwrap();
@@ -1655,7 +1675,8 @@ mod tests {
             .header(HeaderBuilder::default().number(0).build())
             .build();
 
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         let (tip_number, tip_hash) = indexer.tip().unwrap().unwrap();
         assert_eq!(0, tip_number);
@@ -1701,8 +1722,8 @@ mod tests {
             .transaction(cellbase0)
             .header(HeaderBuilder::default().number(0).build())
             .build();
-
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         assert_eq!(
             1, //cellbase0
@@ -1742,8 +1763,8 @@ mod tests {
                         .build(),
                 )
                 .build();
-
-            indexer.append(&pre_block).unwrap();
+            let block_ext = BlockExt::default();
+            indexer.append(&pre_block, &block_ext, 0).unwrap();
         }
 
         // should not delete live cells by mistake
@@ -1773,7 +1794,8 @@ mod tests {
                         .build(),
                 )
                 .build();
-            indexer.append(&block).unwrap();
+            let block_ext = BlockExt::default();
+            indexer.append(&block, &block_ext, 0).unwrap();
             block.hash()
         });
 
@@ -1833,7 +1855,8 @@ mod tests {
             .transaction(tx00.clone())
             .header(HeaderBuilder::default().number(0).build())
             .build();
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+        indexer.append(&block0, &block0_ext, 0).unwrap();
 
         let cellbase1 = TransactionBuilder::default()
             .input(CellInput::new_cellbase_input(1))
@@ -1874,8 +1897,8 @@ mod tests {
                     .build(),
             )
             .build();
-
-        indexer.append(&block1).unwrap();
+        let block1_ext = BlockExt::default();
+        indexer.append(&block1, &block1_ext, 0).unwrap();
         assert_eq!(
             3, // cellbase0, cellbase1, tx10
             indexer
@@ -2012,7 +2035,8 @@ mod tests {
             .transaction(tx01.clone())
             .header(HeaderBuilder::default().number(0).build())
             .build();
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+        indexer.append(&block0, &block0_ext, 0).unwrap();
         let (tip_number, tip_hash) = indexer.tip().unwrap().unwrap();
         assert_eq!(0, tip_number);
         assert_eq!(block0.hash(), tip_hash);
@@ -2069,8 +2093,8 @@ mod tests {
                     .build(),
             )
             .build();
-
-        indexer.append(&block1).unwrap();
+        let block1_ext = BlockExt::default();
+        indexer.append(&block1, &block1_ext, 0).unwrap();
         let (tip_number, tip_hash) = indexer.tip().unwrap().unwrap();
         assert_eq!(1, tip_number);
         assert_eq!(block1.hash(), tip_hash);
@@ -2181,7 +2205,8 @@ mod tests {
             .transaction(tx01.clone())
             .header(HeaderBuilder::default().number(0).build())
             .build();
-        indexer.append(&block0).unwrap();
+        let block0_ext = BlockExt::default();
+        indexer.append(&block0, &block0_ext, 0).unwrap();
         let (tip_number, tip_hash) = indexer.tip().unwrap().unwrap();
         assert_eq!(0, tip_number);
         assert_eq!(block0.hash(), tip_hash);
@@ -2252,8 +2277,8 @@ mod tests {
                     .build(),
             )
             .build();
-
-        indexer.append(&block1).unwrap();
+        let block1_ext = BlockExt::default();
+        indexer.append(&block1, &block1_ext, 0).unwrap();
         let (tip_number, tip_hash) = indexer.tip().unwrap().unwrap();
         assert_eq!(1, tip_number);
         assert_eq!(block1.hash(), tip_hash);

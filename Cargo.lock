@@ -1520,6 +1520,7 @@ dependencies = [
  "hex",
  "include_dir",
  "log",
+ "lru",
  "num-bigint",
  "rand 0.8.5",
  "serde_json",

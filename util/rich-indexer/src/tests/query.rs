@@ -608,8 +608,8 @@ async fn rpc() {
         .transaction(tx01.clone())
         .header(HeaderBuilder::default().number(0).build())
         .build();
-
-    indexer.append(&block0).await.unwrap();
+    let block_ext = BlockExt::default();
+    indexer.append(&block0, &block_ext, 0).await.unwrap();
 
     let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
     let total_blocks = 255;
@@ -666,8 +666,8 @@ async fn rpc() {
                     .build(),
             )
             .build();
-
-        indexer.append(&pre_block).await.unwrap();
+        let block_ext = BlockExt::default();
+        indexer.append(&pre_block, &block_ext, 0).await.unwrap();
     }
 
     // test get_tip rpc
@@ -1222,7 +1222,8 @@ async fn script_search_mode_rpc() {
         .header(HeaderBuilder::default().number(0).build())
         .build();
 
-    indexer.append(&block0).await.unwrap();
+    let block_ext = BlockExt::default();
+    indexer.append(&block0, &block_ext, 0).await.unwrap();
 
     let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
     let total_blocks = 255;
@@ -1280,7 +1281,8 @@ async fn script_search_mode_rpc() {
             )
             .build();
 
-        indexer.append(&pre_block).await.unwrap();
+        let block_ext = BlockExt::default();
+        indexer.append(&pre_block, &block_ext, 0).await.unwrap();
     }
 
     // test get_cells rpc with prefix search mode
@@ -1472,7 +1474,8 @@ async fn output_data_filter_mode_rpc() {
         .header(HeaderBuilder::default().number(0).build())
         .build();
 
-    indexer.append(&block0).await.unwrap();
+    let block_ext = BlockExt::default();
+    indexer.append(&block0, &block_ext, 0).await.unwrap();
 
     // test get_cells rpc with output_data Prefix search mode
     let cells = rpc
