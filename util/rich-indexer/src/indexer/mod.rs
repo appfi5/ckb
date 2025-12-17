@@ -12,7 +12,7 @@ use ckb_types::{
     core::{BlockExt, BlockNumber, BlockView},
     packed::Byte32,
 };
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use update::{init_block, update_block};
 
@@ -41,7 +41,7 @@ impl RichIndexer {
     /// Construct new Rich Indexer instance
     pub fn new(
         store: SQLXPool,
-        pool: Option<Arc<RwLock<Pool>>>,
+        pool: Option<Arc<Pool>>,
         custom_filters: CustomFilters,
         async_runtime: Handle,
         request_limit: usize,
@@ -109,18 +109,14 @@ pub(crate) struct AsyncRichIndexer {
     pub(crate) store: SQLXPool,
     /// An optional overlay to index the pending txs in the ckb tx pool
     /// currently only supports removals of dead cells from the pending txs
-    pub(crate) pool: Option<Arc<RwLock<Pool>>>,
+    pub(crate) pool: Option<Arc<Pool>>,
     /// custom filters
     custom_filters: CustomFilters,
 }
 
 impl AsyncRichIndexer {
     /// Construct new AsyncRichIndexer instance
-    pub fn new(
-        store: SQLXPool,
-        pool: Option<Arc<RwLock<Pool>>>,
-        custom_filters: CustomFilters,
-    ) -> Self {
+    pub fn new(store: SQLXPool, pool: Option<Arc<Pool>>, custom_filters: CustomFilters) -> Self {
         Self {
             store,
             pool,
@@ -150,8 +146,8 @@ impl AsyncRichIndexer {
             .await
             .map_err(|err| Error::DB(err.to_string()))?;
 
-        if let Some(mut pool) = self.pool.as_ref().map(|p| p.write().expect("acquire lock")) {
-            pool.transactions_committed(&block.transactions());
+        if let Some(pool) = self.pool.as_ref() {
+            pool.transactions_committed(&block.transactions()).await;
         }
 
         Ok(())

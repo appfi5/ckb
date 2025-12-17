@@ -1,5 +1,6 @@
 use crate::service::SUBSCRIBER_NAME;
 use crate::store::{Batch, IteratorDirection, Store};
+use ckb_async_runtime::Handle;
 use ckb_indexer_sync::{CustomFilters, Error, IndexerSync, Pool};
 use ckb_types::core::BlockExt;
 use ckb_types::{
@@ -8,10 +9,7 @@ use ckb_types::{
     prelude::*,
 };
 use std::convert::TryInto;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 
 /// Tx index alias
 pub type TxIndex = u32;
@@ -280,9 +278,11 @@ pub(crate) struct Indexer<S> {
     prune_interval: u64,
     /// An optional overlay to index the pending txs in the ckb tx pool
     /// currently only supports removals of dead cells from the pending txs
-    pool: Option<Arc<RwLock<Pool>>>,
+    pool: Option<Arc<Pool>>,
     /// custom filters
     custom_filters: CustomFilters,
+    /// async runtime handle
+    async_handle: Handle,
 }
 
 impl<S> Indexer<S> {
@@ -291,8 +291,9 @@ impl<S> Indexer<S> {
         store: S,
         keep_num: u64,
         prune_interval: u64,
-        pool: Option<Arc<RwLock<Pool>>>,
+        pool: Option<Arc<Pool>>,
         custom_filters: CustomFilters,
+        async_handle: Handle,
     ) -> Self {
         Self {
             store,
@@ -300,6 +301,7 @@ impl<S> Indexer<S> {
             prune_interval,
             pool,
             custom_filters,
+            async_handle,
         }
     }
 
@@ -323,14 +325,15 @@ where
     ) -> Result<(), Error> {
         let mut batch = self.store.batch()?;
         let transactions = block.transactions();
-        let pool = self.pool.as_ref().map(|p| p.write().expect("acquire lock"));
         if !self.custom_filters.is_block_filter_match(block) {
             batch.put_kv(Key::Header(block.number(), &block.hash(), true), vec![])?;
             batch.commit()?;
 
-            if let Some(mut pool) = pool {
-                pool.transactions_committed(&transactions);
-            }
+            self.async_handle.block_on(async move {
+                if let Some(pool) = self.pool.as_ref() {
+                    pool.transactions_committed(&transactions).await;
+                }
+            });
 
             return Ok(());
         }
@@ -516,9 +519,11 @@ where
         }
         batch.commit()?;
 
-        if let Some(mut pool) = pool {
-            pool.transactions_committed(&transactions);
-        }
+        self.async_handle.block_on(async move {
+            if let Some(pool) = self.pool.as_ref() {
+                pool.transactions_committed(&transactions).await;
+            }
+        });
 
         if block_number % self.prune_interval == 0 {
             self.prune()?;

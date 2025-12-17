@@ -32,7 +32,7 @@ use ckb_types::{
 use rocksdb::{LogLevel, prelude::*};
 
 use std::marker::Send;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -326,7 +326,7 @@ impl IndexerSyncService {
     }
 
     /// Get index data based on transaction pool synchronization
-    pub fn pool(&self) -> Option<Arc<RwLock<Pool>>> {
+    pub fn pool(&self) -> Option<Arc<Pool>> {
         self.pool_service.pool()
     }
 

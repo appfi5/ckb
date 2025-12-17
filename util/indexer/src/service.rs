@@ -18,7 +18,7 @@ use rocksdb::{Direction, IteratorMode, prelude::*};
 
 use std::convert::TryInto;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 pub(crate) const SUBSCRIBER_NAME: &str = "Indexer";
 const DEFAULT_LOG_KEEP_NUM: usize = 1;
@@ -32,6 +32,7 @@ pub struct IndexerService {
     block_filter: Option<String>,
     cell_filter: Option<String>,
     request_limit: usize,
+    async_handle: Handle,
 }
 
 impl IndexerService {
@@ -48,7 +49,7 @@ impl IndexerService {
             ckb_db,
             pool_service,
             &config.into(),
-            async_handle,
+            async_handle.clone(),
             config.init_tip_hash.clone(),
         );
 
@@ -58,6 +59,7 @@ impl IndexerService {
             block_filter: config.block_filter.clone(),
             cell_filter: config.cell_filter.clone(),
             request_limit: config.request_limit.unwrap_or(usize::MAX),
+            async_handle,
         }
     }
 
@@ -100,6 +102,7 @@ impl IndexerService {
             1000,
             self.sync.pool(),
             CustomFilters::new(self.block_filter.as_deref(), self.cell_filter.as_deref()),
+            self.async_handle.clone(),
         )
     }
 
@@ -126,7 +129,7 @@ impl IndexerService {
 #[derive(Clone)]
 pub struct IndexerHandle {
     pub(crate) store: RocksdbStore,
-    pub(crate) pool: Option<Arc<RwLock<Pool>>>,
+    pub(crate) pool: Option<Arc<Pool>>,
     request_limit: usize,
 }
 
@@ -201,10 +204,7 @@ impl IndexerHandle {
         let iter = snapshot.iterator(mode).skip(skip);
 
         let mut last_key = Vec::new();
-        let pool = self
-            .pool
-            .as_ref()
-            .map(|pool| pool.read().expect("acquire lock"));
+        let pool = self.pool.as_ref();
         let cells = iter
             .take_while(|(key, _value)| key.starts_with(&prefix))
             .filter_map(|(key, value)| {
@@ -662,10 +662,7 @@ impl IndexerHandle {
         let mode = IteratorMode::From(from_key.as_ref(), direction);
         let snapshot = self.store.inner().snapshot();
         let iter = snapshot.iterator(mode).skip(skip);
-        let pool = self
-            .pool
-            .as_ref()
-            .map(|pool| pool.read().expect("acquire lock"));
+        let pool = self.pool.as_ref();
 
         let capacity: u64 = iter
             .take_while(|(key, _value)| key.starts_with(&prefix))

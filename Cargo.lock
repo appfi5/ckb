@@ -1089,6 +1089,7 @@ dependencies = [
 name = "ckb-indexer-sync"
 version = "0.203.0"
 dependencies = [
+ "anyhow",
  "ckb-app-config",
  "ckb-async-runtime",
  "ckb-db-schema",
@@ -1099,9 +1100,14 @@ dependencies = [
  "ckb-stop-handler",
  "ckb-store",
  "ckb-types",
+ "futures",
+ "hex",
+ "log",
  "numext-fixed-uint",
  "rhai",
  "serde_json",
+ "sql-builder",
+ "sqlx",
  "thiserror 1.0.69",
 ]
 

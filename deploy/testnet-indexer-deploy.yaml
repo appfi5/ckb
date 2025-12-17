@@ -288,7 +288,7 @@ data:
     # # Utilize the `ckb reset-data --indexer` and `ckb reset-data --rich-indexer` subcommands to efficiently clean existing indexes.
     # [indexer_v2]
     # # Indexing the pending txs in the ckb tx-pool
-    # index_tx_pool = false
+    # index_tx_pool = true
     # # Customize block filtering rules to index only retained blocks
     # block_filter = "block.header.number.to_uint() >= \"0x0\".to_uint()"
     # # Customize cell filtering rules to index only retained cells

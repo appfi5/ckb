@@ -16,19 +16,19 @@ use num_bigint::BigUint;
 use sql_builder::SqlBuilder;
 use sqlx::Row;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Async handle to the rich-indexer.
 #[derive(Clone)]
 pub struct AsyncRichIndexerHandle {
     store: SQLXPool,
-    pool: Option<Arc<RwLock<Pool>>>,
+    pool: Option<Arc<Pool>>,
     request_limit: usize,
 }
 
 impl AsyncRichIndexerHandle {
     /// Construct new AsyncRichIndexerHandle instance
-    pub fn new(store: SQLXPool, pool: Option<Arc<RwLock<Pool>>>, request_limit: usize) -> Self {
+    pub fn new(store: SQLXPool, pool: Option<Arc<Pool>>, request_limit: usize) -> Self {
         Self {
             store,
             pool,

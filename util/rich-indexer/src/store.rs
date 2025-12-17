@@ -177,6 +177,18 @@ impl SQLXPool {
         pool.begin().await.map_err(Into::into)
     }
 
+    pub async fn read_only_transaction(&self) -> Result<Transaction<'_, Any>> {
+        let pool = self.get_pool()?;
+        let mut tx = pool.begin().await?;
+        // Set transaction to read-only mode for PostgreSQL compatibility
+        if self.db_driver == DBDriver::Postgres {
+            sqlx::query("SET TRANSACTION READ ONLY")
+                .execute(&mut *tx)
+                .await?;
+        }
+        Ok(tx)
+    }
+
     pub fn get_pool(&self) -> Result<&AnyPool> {
         self.pool
             .get()
