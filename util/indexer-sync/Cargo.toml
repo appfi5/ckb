@@ -25,3 +25,9 @@ rhai = { workspace = true, features = ["no_function", "no_float", "no_module", "
 rocksdb = { workspace = true, features = ["snappy"], default-features = false }
 serde_json.workspace = true
 thiserror.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "any", "postgres"] }
+anyhow.workspace = true
+futures.workspace = true
+log.workspace = true
+hex.workspace = true
+sql-builder.workspace = true

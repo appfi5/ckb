@@ -11,6 +11,7 @@ use ckb_jsonrpc_types::{
     BlockView as JsonBlockView, IndexerOrder, IndexerScriptType, IndexerSearchKey,
     IndexerSearchMode, JsonBytes,
 };
+use ckb_types::core::BlockExt;
 use ckb_types::h256;
 use ckb_types::prelude::*;
 
@@ -30,9 +31,10 @@ async fn connect_sqlite(store_path: &str) -> SQLXPool {
 async fn insert_blocks(store: SQLXPool) {
     let data_path = String::from(BLOCK_DIR);
     let indexer = AsyncRichIndexer::new(store, None, CustomFilters::new(None, None));
+    let block_ext = BlockExt::default();
     for i in 0..10 {
         indexer
-            .append(&read_block_view(i, data_path.clone()).into())
+            .append(&read_block_view(i, data_path.clone()).into(), &block_ext, 0)
             .await
             .unwrap();
     }

@@ -1,7 +1,6 @@
-mod insert;
 mod remove;
+mod update;
 
-pub(crate) use insert::*;
 pub(crate) use remove::*;
 
 use crate::{RichIndexerHandle, service::SUBSCRIBER_NAME, store::SQLXPool};
@@ -10,13 +9,12 @@ use ckb_async_runtime::Handle;
 use ckb_indexer_sync::{CustomFilters, Error, IndexerSync, Pool};
 use ckb_types::{
     H256,
-    core::{BlockNumber, BlockView, TransactionView},
+    core::{BlockExt, BlockNumber, BlockView},
     packed::Byte32,
 };
-use sqlx::{Any, Transaction};
+use std::sync::Arc;
 
-use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use update::{init_block, update_block};
 
 /// the database tables are as follows:
 ///
@@ -43,7 +41,7 @@ impl RichIndexer {
     /// Construct new Rich Indexer instance
     pub fn new(
         store: SQLXPool,
-        pool: Option<Arc<RwLock<Pool>>>,
+        pool: Option<Arc<Pool>>,
         custom_filters: CustomFilters,
         async_runtime: Handle,
         request_limit: usize,
@@ -72,8 +70,15 @@ impl IndexerSync for RichIndexer {
     }
 
     /// Appends a new block to the indexer
-    fn append(&self, block: &BlockView) -> Result<(), Error> {
-        let future = self.async_rich_indexer.append(block);
+    fn append(
+        &self,
+        block: &BlockView,
+        block_ext: &BlockExt,
+        block_interval: u64,
+    ) -> Result<(), Error> {
+        let future = self
+            .async_rich_indexer
+            .append(block, block_ext, block_interval);
         self.async_runtime.block_on(future)
     }
 
@@ -104,18 +109,14 @@ pub(crate) struct AsyncRichIndexer {
     pub(crate) store: SQLXPool,
     /// An optional overlay to index the pending txs in the ckb tx pool
     /// currently only supports removals of dead cells from the pending txs
-    pub(crate) pool: Option<Arc<RwLock<Pool>>>,
+    pub(crate) pool: Option<Arc<Pool>>,
     /// custom filters
     custom_filters: CustomFilters,
 }
 
 impl AsyncRichIndexer {
     /// Construct new AsyncRichIndexer instance
-    pub fn new(
-        store: SQLXPool,
-        pool: Option<Arc<RwLock<Pool>>>,
-        custom_filters: CustomFilters,
-    ) -> Self {
+    pub fn new(store: SQLXPool, pool: Option<Arc<Pool>>, custom_filters: CustomFilters) -> Self {
         Self {
             store,
             pool,
@@ -125,25 +126,28 @@ impl AsyncRichIndexer {
 }
 
 impl AsyncRichIndexer {
-    pub(crate) async fn append(&self, block: &BlockView) -> Result<(), Error> {
+    pub(crate) async fn append(
+        &self,
+        block: &BlockView,
+        block_ext: &BlockExt,
+        block_interval: u64,
+    ) -> Result<(), Error> {
         let mut tx = self
             .store
             .transaction()
             .await
             .map_err(|err| Error::DB(err.to_string()))?;
+
         if self.custom_filters.is_block_filter_match(block) {
-            let block_id = append_block(block, &mut tx).await?;
-            self.insert_transactions(block_id, block, &mut tx).await?;
-        } else {
-            let block_headers = vec![(block.hash().raw_data().to_vec(), block.number() as i64)];
-            bulk_insert_blocks_simple(block_headers, &mut tx).await?;
+            update_block(block, block_ext, block_interval, &mut tx).await?;
         }
+
         tx.commit()
             .await
             .map_err(|err| Error::DB(err.to_string()))?;
 
-        if let Some(mut pool) = self.pool.as_ref().map(|p| p.write().expect("acquire lock")) {
-            pool.transactions_committed(&block.transactions());
+        if let Some(pool) = self.pool.as_ref() {
+            pool.transactions_committed(&block.transactions()).await;
         }
 
         Ok(())
@@ -161,95 +165,18 @@ impl AsyncRichIndexer {
         tx.commit().await.map_err(|err| Error::DB(err.to_string()))
     }
 
-    pub(crate) async fn insert_transactions(
-        &self,
-        block_id: i64,
-        block_view: &BlockView,
-        tx: &mut Transaction<'_, Any>,
-    ) -> Result<(), Error> {
-        for (tx_index, tx_view) in block_view.transactions().into_iter().enumerate() {
-            self.insert_transaction(block_id, tx_index, tx_view, tx)
-                .await?;
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn insert_transaction(
-        &self,
-        block_id: i64,
-        tx_index: usize,
-        tx_view: TransactionView,
-        tx: &mut Transaction<'_, Any>,
-    ) -> Result<(), Error> {
-        let mut is_tx_matched = false;
-        let mut output_cell_rows = Vec::new();
-        let mut input_rows = Vec::new();
-        let mut script_set = HashSet::new();
-
-        for (output_index, (cell, data)) in tx_view.outputs_with_data_iter().enumerate() {
-            if self
-                .custom_filters
-                .is_cell_filter_match(&cell, &(&data).into())
-            {
-                build_output_cell_rows(&cell, output_index, &data, &mut output_cell_rows);
-                build_script_set(&cell, &mut script_set).await;
-                is_tx_matched = true;
-            }
-        }
-
-        if tx_index != 0 {
-            for (input_index, input) in tx_view.inputs().into_iter().enumerate() {
-                let out_point = input.previous_output();
-                if !spend_cell(&out_point, tx).await? {
-                    break;
-                }
-                if self.custom_filters.is_cell_filter_enabled() {
-                    if let Some((output_id, output, output_data)) =
-                        query_output_cell(&out_point, tx).await?
-                    {
-                        if self
-                            .custom_filters
-                            .is_cell_filter_match(&output, &output_data.into())
-                        {
-                            build_input_rows(output_id, &input, input_index, &mut input_rows);
-                            is_tx_matched = true;
-                        }
-                    }
-                } else if let Some(output_id) = query_output_id(&out_point, tx).await? {
-                    build_input_rows(output_id, &input, input_index, &mut input_rows);
-                    is_tx_matched = true;
-                }
-            }
-        }
-
-        if !self.custom_filters.is_cell_filter_enabled() {
-            is_tx_matched = true;
-        }
-
-        if !is_tx_matched {
-            return Ok(());
-        }
-
-        let tx_id = insert_transaction_table(block_id, tx_index, &tx_view, tx).await?;
-        bulk_insert_tx_association_header_dep_table(tx_id, &tx_view, tx).await?;
-        bulk_insert_tx_association_cell_dep_table(tx_id, &tx_view, tx).await?;
-
-        bulk_insert_input_table(tx_id, input_rows, tx).await?;
-        bulk_insert_script_table(script_set, tx).await?;
-        bulk_insert_output_table(tx_id, output_cell_rows, tx).await
-    }
-
     pub(crate) async fn set_init_tip(&self, init_tip_number: u64, init_tip_hash: &H256) {
-        let blocks_simple = vec![(init_tip_hash.as_bytes().to_vec(), init_tip_number as i64)];
         let mut tx = self
             .store
             .transaction()
             .await
             .map_err(|err| Error::DB(err.to_string()))
             .expect("set_init_tip create transaction should be OK");
-        bulk_insert_blocks_simple(blocks_simple, &mut tx)
+
+        init_block(init_tip_number, init_tip_hash, &mut tx)
             .await
-            .expect("set_init_tip bulk_insert_blocks_simple should be OK");
+            .expect("set_init_tip bulk_insert_and_return_ids should be OK");
+
         tx.commit().await.expect("set_init_tip commit should be OK");
     }
 }

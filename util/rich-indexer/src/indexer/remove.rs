@@ -12,7 +12,6 @@ pub(crate) async fn rollback_block(tx: &mut Transaction<'_, Any>) -> Result<(), 
     };
 
     let tx_id_list = query_tx_id_list_by_block_id(block_id, tx).await?;
-    let output_lock_type_list = query_outputs_by_tx_id_list(&tx_id_list, tx).await?;
 
     // update spent cells
     reset_spent_cells(&tx_id_list, tx).await?;
@@ -24,29 +23,13 @@ pub(crate) async fn rollback_block(tx: &mut Transaction<'_, Any>) -> Result<(), 
     remove_batch_by_blobs("input", "consumed_tx_id", &tx_id_list, tx).await?;
     remove_batch_by_blobs("output", "tx_id", &tx_id_list, tx).await?;
 
-    // remove script
-    let mut script_id_list_to_remove = Vec::new();
-    for (_, lock_script_id, type_script_id) in output_lock_type_list {
-        if !script_exists_in_output(lock_script_id, tx).await? {
-            script_id_list_to_remove.push(lock_script_id);
-        }
-        if let Some(type_script_id) = type_script_id {
-            if !script_exists_in_output(type_script_id, tx).await? {
-                script_id_list_to_remove.push(type_script_id);
-            }
-        }
-    }
-    remove_batch_by_blobs("script", "id", &script_id_list_to_remove, tx).await?;
+    // remove output data
+    // collect output id which data len > 1024
+    let output_id_list = query_big_output_id_list_by_tx_id_list(&tx_id_list, tx).await?;
+    remove_batch_by_blobs("output_data", "output_id", &output_id_list, tx).await?;
 
-    // remove block and block associations
-    let uncle_id_list = query_uncle_id_list_by_block_id(block_id, tx).await?;
+    // remove block
     remove_batch_by_blobs("block", "id", &[block_id], tx).await?;
-    remove_batch_by_blobs("block_association_proposal", "block_id", &[block_id], tx).await?;
-    remove_batch_by_blobs("block_association_uncle", "block_id", &[block_id], tx).await?;
-
-    // remove uncles
-    remove_batch_by_blobs("block", "id", &uncle_id_list, tx).await?;
-    remove_batch_by_blobs("block_association_proposal", "block_id", &uncle_id_list, tx).await?;
 
     Ok(())
 }
@@ -86,6 +69,10 @@ async fn remove_batch_by_blobs(
 async fn reset_spent_cells(tx_id_list: &[i64], tx: &mut Transaction<'_, Any>) -> Result<(), Error> {
     let query = SqlBuilder::update_table("output")
         .set("is_spent", 0)
+        .set("consumed_tx_hash", "'\\x'::bytea")
+        .set("input_index", -1)
+        .set("consumed_block_number", -1)
+        .set("consumed_timestamp", -1)
         .and_where_in_query(
             "id",
             SqlBuilder::select_from("input")
@@ -103,24 +90,6 @@ async fn reset_spent_cells(tx_id_list: &[i64], tx: &mut Transaction<'_, Any>) ->
         .map_err(|err| Error::DB(err.to_string()))?;
 
     Ok(())
-}
-
-async fn query_uncle_id_list_by_block_id(
-    block_id: i64,
-    tx: &mut Transaction<'_, Any>,
-) -> Result<Vec<i64>, Error> {
-    SQLXPool::new_query(
-        r#"
-            SELECT DISTINCT uncle_id
-            FROM block_association_uncle
-            WHERE block_id = $1
-            "#,
-    )
-    .bind(block_id)
-    .fetch_all(tx.as_mut())
-    .await
-    .map(|rows| rows.into_iter().map(|row| row.get("uncle_id")).collect())
-    .map_err(|err| Error::DB(err.to_string()))
 }
 
 async fn query_tip_id(tx: &mut Transaction<'_, Any>) -> Result<Option<i64>, Error> {
@@ -160,100 +129,39 @@ async fn query_tx_id_list_by_block_id(
     .map_err(|err| Error::DB(err.to_string()))
 }
 
-async fn query_outputs_by_tx_id_list(
+async fn query_big_output_id_list_by_tx_id_list(
     tx_id_list: &[i64],
     tx: &mut Transaction<'_, Any>,
-) -> Result<Vec<(i64, i64, Option<i64>)>, Error> {
+) -> Result<Vec<i64>, Error> {
     if tx_id_list.is_empty() {
-        return Ok(vec![]);
+        return Ok(Vec::new());
     }
 
     // build query str
     let mut query_builder = SqlBuilder::select_from("output");
     let sql = query_builder
-        .fields(&["id", "lock_script_id", "type_script_id"])
+        .field("id")
         .and_where_in("tx_id", &sqlx_param_placeholders(1..tx_id_list.len())?)
-        .order_by("output_index", false)
+        .and_where("data_size > 1024")
         .sql()
         .map_err(|err| Error::DB(err.to_string()))?;
 
     // bind
-    let mut query = SQLXPool::new_query(&sql);
-    for tx_id in tx_id_list {
-        query = query.bind(tx_id);
+    let mut query: sqlx::query::Query<'_, Any, sqlx::any::AnyArguments<'_>> = sqlx::query(&sql);
+    for id in tx_id_list {
+        query = query.bind(id);
     }
 
     // execute
     query
         .fetch_all(tx.as_mut())
         .await
-        .map_err(|err| Error::DB(err.to_string()))
         .map(|rows| {
-            rows.iter()
-                .map(|row| {
-                    (
-                        row.get("id"),
-                        row.get("lock_script_id"),
-                        row.get("type_script_id"),
-                    )
-                })
+            rows.into_iter()
+                .map(|row| row.get::<i64, _>("id"))
                 .collect()
         })
-}
-
-async fn script_exists_in_output(
-    script_id: i64,
-    tx: &mut Transaction<'_, Any>,
-) -> Result<bool, Error> {
-    let row_lock = sqlx::query(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM output
-            WHERE lock_script_id = $1
-        )
-        "#,
-    )
-    .bind(script_id)
-    .fetch_one(tx.as_mut())
-    .await
-    .map_err(|err| Error::DB(err.to_string()))?;
-
-    // pg type is BOOLEAN
-    match row_lock.try_get::<bool, _>(0) {
-        Ok(r) => {
-            if r {
-                return Ok(true);
-            }
-        }
-        Err(_) => {
-            // sqlite type is BIGINT
-            if row_lock.get::<i64, _>(0) == 1 {
-                return Ok(true);
-            }
-        }
-    }
-
-    let row_type = sqlx::query(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM output
-            WHERE type_script_id = $1
-        )
-        "#,
-    )
-    .bind(script_id)
-    .fetch_one(tx.as_mut())
-    .await
-    .map_err(|err| Error::DB(err.to_string()))?;
-
-    // pg type is BOOLEAN
-    match row_lock.try_get::<bool, _>(0) {
-        Ok(r) => Ok(r),
-        // sqlite type is BIGINT
-        Err(_) => Ok(row_type.get::<i64, _>(0) == 1),
-    }
+        .map_err(|err| Error::DB(err.to_string()))
 }
 
 fn sqlx_param_placeholders(range: std::ops::Range<usize>) -> Result<Vec<String>, Error> {

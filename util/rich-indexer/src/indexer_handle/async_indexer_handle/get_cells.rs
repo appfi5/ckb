@@ -108,13 +108,10 @@ impl AsyncRichIndexerHandle {
 
         // filter cells in pool
         let mut dead_cells = Vec::new();
-        if let Some(pool) = self
-            .pool
-            .as_ref()
-            .map(|pool| pool.read().expect("acquire lock"))
-        {
+        if let Some(pool) = self.pool.as_ref() {
             dead_cells = pool
                 .dead_cells()
+                .iter()
                 .map(|out_point| {
                     let tx_hash: H256 = out_point.tx_hash().into();
                     (tx_hash.as_bytes().to_vec(), out_point.index().into())
